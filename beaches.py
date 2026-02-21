@@ -42,24 +42,16 @@ RISK_THRESHOLDS = {"low": 1, "medium": 5, "high": 15}
 #               particule est considérée comme susceptible d'échouer.
 
 BEACHES = [
-    # Côte nord
-    # radius_km = zone d'approche : à ~0.2 m/s (courant typique Caraïbes),
-    # 50 km ≈ 3 jours de dérive → risque d'échouage dans la fenêtre de prévision.
-    # La faible densité de l'échantillon (≤500 pts sur toute la Caraïbe) exige
-    # un rayon ≥ 40 km pour être statistiquement significatif.
-    {"name": "Saint-Jean",        "lat": 17.897, "lon": -62.840, "radius_km": 50.0},
-    {"name": "Flamands",          "lat": 17.912, "lon": -62.857, "radius_km": 50.0},
-    {"name": "Colombier",         "lat": 17.919, "lon": -62.862, "radius_km": 50.0},
-    {"name": "Lorient",           "lat": 17.901, "lon": -62.821, "radius_km": 50.0},
-    # Côte nord-est / lagunaire
-    {"name": "Marigot",           "lat": 17.904, "lon": -62.798, "radius_km": 50.0},
-    {"name": "Grand Cul-de-Sac", "lat": 17.911, "lon": -62.792, "radius_km": 50.0},
-    {"name": "Petit Cul-de-Sac", "lat": 17.907, "lon": -62.796, "radius_km": 50.0},
-    # Côte est
-    {"name": "Toiny",             "lat": 17.893, "lon": -62.782, "radius_km": 50.0},
-    # Côte sud
-    {"name": "Gouverneur",        "lat": 17.871, "lon": -62.843, "radius_km": 50.0},
-    {"name": "Grande Saline",     "lat": 17.872, "lon": -62.826, "radius_km": 50.0},
+    {"name": "Flamands",         "lat": 17.9067, "lon": -62.8467, "radius_km": 3.0},
+    {"name": "Colombier",        "lat": 17.9033, "lon": -62.8600, "radius_km": 2.0},
+    {"name": "Saint-Jean",       "lat": 17.9000, "lon": -62.8267, "radius_km": 4.0},
+    {"name": "Lorient",          "lat": 17.9000, "lon": -62.8100, "radius_km": 3.0},
+    {"name": "Grand_Cul-de-Sac", "lat": 17.9117, "lon": -62.7917, "radius_km": 3.0},
+    {"name": "Petit_Cul-de-Sac", "lat": 17.9067, "lon": -62.7967, "radius_km": 2.0},
+    {"name": "Toiny",            "lat": 17.8933, "lon": -62.7817, "radius_km": 2.0},
+    {"name": "Gouverneur",       "lat": 17.8717, "lon": -62.8433, "radius_km": 3.0},
+    {"name": "Grande_Saline",    "lat": 17.8717, "lon": -62.8267, "radius_km": 3.0},
+    {"name": "Marigot",          "lat": 17.9033, "lon": -62.8067, "radius_km": 2.0},
 ]
 
 

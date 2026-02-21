@@ -1,0 +1,23 @@
+# Credentials & config local
+.env
+
+# Base de données (données, pas du code)
+*.db
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.save
+
+# macOS
+.DS_Store
+.localized
+
+# Screenshots & captures
+*.png
+*.jpg
+captures/
+
+# Logs
+*.log

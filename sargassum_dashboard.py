@@ -901,7 +901,7 @@ elif page == "Webcams":
                             f"{row['camera_name']}  ·  "
                             f"{row['captured_at'][:16].replace('T', ' ')}"
                         )
-                        st.image(str(img_path), caption=caption, use_container_width=True)
+                        st.image(str(img_path), caption=caption, width="stretch")
                     else:
                         st.warning(f"**{row['camera_name']}**  \nFichier introuvable")
 

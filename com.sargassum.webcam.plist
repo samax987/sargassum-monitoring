@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+    "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.sargassum.webcam</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/opt/homebrew/bin/python3</string>
+        <string>/Users/samueldemacedo/Desktop/sargassum_webcam_capture.py</string>
+        <string>--once</string>
+    </array>
+
+    <!-- Répertoire de travail : captures/ et sargassum_data.db créés ici -->
+    <key>WorkingDirectory</key>
+    <string>/Users/samueldemacedo/Desktop</string>
+
+    <!-- Toutes les heures -->
+    <key>StartInterval</key>
+    <integer>3600</integer>
+
+    <!-- Lancer aussi au chargement (démarrage du Mac / connexion utilisateur) -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/sargassum_webcam.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/tmp/sargassum_webcam.log</string>
+
+    <key>KeepAlive</key>
+    <false/>
+</dict>
+</plist>

@@ -285,6 +285,32 @@ def load_beach_scores(db_path: str) -> pd.DataFrame:
         return pd.DataFrame()
 
 
+@st.cache_data(show_spinner=False)
+def load_webcam_latest(db_path: str) -> pd.DataFrame:
+    """Retourne la dernière capture réussie par caméra (island, camera_name, file_path, captured_at)."""
+    try:
+        conn = get_connection(db_path)
+        if conn is None:
+            return pd.DataFrame()
+        df = pd.read_sql_query(
+            """SELECT island, camera_name, file_path, captured_at, file_size
+               FROM webcam_captures
+               WHERE success = 1
+                 AND file_path IS NOT NULL
+                 AND id IN (
+                     SELECT MAX(id) FROM webcam_captures
+                     WHERE success = 1
+                     GROUP BY camera_name
+                 )
+               ORDER BY island, camera_name""",
+            conn,
+        )
+        conn.close()
+        return df
+    except Exception:
+        return pd.DataFrame()
+
+
 # ── Helpers carte ─────────────────────────────────────────────────────────────
 
 def day_color(offset: int) -> str:
@@ -335,7 +361,7 @@ with st.sidebar:
     st.divider()
     page = st.radio(
         "Navigation",
-        ["Carte", "Métriques", "Actualités", "Plages"],
+        ["Carte", "Métriques", "Actualités", "Plages", "Webcams"],
         label_visibility="collapsed",
     )
 
@@ -846,3 +872,57 @@ elif page == "Plages":
             .reset_index(drop=True)
         )
         st.dataframe(detail, use_container_width=True, hide_index=True)
+
+
+# ── Page 5 : Webcams ──────────────────────────────────────────────────────────
+
+elif page == "Webcams":
+    from pathlib import Path as _Path
+
+    st.header("Webcams — Dernières captures")
+
+    df_cams = load_webcam_latest(db_path)
+
+    if df_cams.empty:
+        st.warning(
+            "Aucune capture disponible. "
+            "Lancez d'abord : `python sargassum_webcam_capture.py --once`"
+        )
+    else:
+        for island in df_cams["island"].unique():
+            st.subheader(island)
+            island_df = df_cams[df_cams["island"] == island].reset_index(drop=True)
+            cols = st.columns(3)
+            for i, row in island_df.iterrows():
+                with cols[i % 3]:
+                    img_path = _Path(row["file_path"])
+                    if img_path.exists():
+                        caption = (
+                            f"{row['camera_name']}  ·  "
+                            f"{row['captured_at'][:16].replace('T', ' ')}"
+                        )
+                        st.image(str(img_path), caption=caption, use_container_width=True)
+                    else:
+                        st.warning(f"**{row['camera_name']}**  \nFichier introuvable")
+
+        st.divider()
+        with st.expander("Historique des captures (24 dernières heures)"):
+            conn_hist = get_connection(db_path)
+            if conn_hist:
+                try:
+                    df_hist = pd.read_sql_query(
+                        """SELECT captured_at, island, camera_name,
+                                  success, http_status, file_size
+                           FROM webcam_captures
+                           WHERE captured_at >= datetime('now', '-24 hours')
+                           ORDER BY captured_at DESC
+                           LIMIT 200""",
+                        conn_hist,
+                    )
+                    conn_hist.close()
+                    if not df_hist.empty:
+                        st.dataframe(df_hist, use_container_width=True, hide_index=True)
+                    else:
+                        st.info("Aucune capture dans les dernières 24 heures.")
+                except Exception:
+                    st.warning("Impossible de charger l'historique.")

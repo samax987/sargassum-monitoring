@@ -189,6 +189,20 @@ CREATE TABLE IF NOT EXISTS copernicus_currents (
     dominant_dir_deg REAL,             -- direction dominante en degrés (0-360, 0=Est)
     raw_metadata     TEXT
 );
+
+-- Captures webcam (image par caméra, toutes les heures)
+CREATE TABLE IF NOT EXISTS webcam_captures (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    captured_at  TEXT    NOT NULL,   -- ISO-8601 local, ex: 2026-02-21T14:30:00
+    island       TEXT    NOT NULL,   -- ex: 'Saint-Barth'
+    camera_name  TEXT    NOT NULL,   -- ex: 'Flamand_Beach'
+    camera_key   TEXT,               -- clé vision-environnement ou yt_id
+    file_path    TEXT,               -- chemin absolu du .jpg (NULL si échec)
+    success      INTEGER NOT NULL,   -- 1 = OK, 0 = échec
+    http_status  INTEGER,            -- code HTTP reçu (NULL si exception réseau)
+    file_size    INTEGER,            -- taille en bytes (NULL si échec)
+    raw_metadata TEXT                -- JSON (url, erreur…)
+);
 """
 
 def get_conn(path: Path = DB_PATH) -> sqlite3.Connection:

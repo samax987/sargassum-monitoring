@@ -769,11 +769,16 @@ elif page == "Plages":
             )
             for _, brow in df_day.iterrows():
                 color = RISK_COLORS.get(brow["risk_level"], "#808080")
+                reg   = brow.get("regional_score") or 0
+                loc   = brow.get("local_score")    or 0
+                prox  = brow.get("closest_km")
+                prox_str = f"{prox:.1f} km" if prox is not None else "—"
                 popup_html = (
                     f"<b>{brow['beach_name']}</b><br>"
                     f"Risque : <b>{brow['risk_level']}</b><br>"
-                    f"Particules (échantillon) : {brow['sample_count']}<br>"
-                    f"Estimé population : {brow['est_count']:.0f}<br>"
+                    f"Score régional (σ=50 km) : {reg:.1f}<br>"
+                    f"Score local (σ=r) : {loc:.2f}<br>"
+                    f"Particule la plus proche : {prox_str}<br>"
                     f"Rayon catchment : {brow['radius_km']:.0f} km"
                 )
                 CircleMarker(
@@ -784,8 +789,8 @@ elif page == "Plages":
                     fill_color=color,
                     fill_opacity=0.85,
                     weight=2,
-                    popup=Popup(popup_html, max_width=220),
-                    tooltip=f"{brow['beach_name']} — {brow['risk_level']}",
+                    popup=Popup(popup_html, max_width=240),
+                    tooltip=f"{brow['beach_name']} — {brow['risk_level']} — {prox_str}",
                 ).add_to(m_beach)
             st_folium(m_beach, width="100%", height=430, returned_objects=[])
 
@@ -793,37 +798,40 @@ elif page == "Plages":
         with col_matrix:
             st.subheader("Matrice de risque")
 
-            pivot_count = df_beaches.pivot_table(
+            # regional_score : valeur continue — couleur proportionnelle aux seuils
+            pivot_reg = df_beaches.pivot_table(
                 index="beach_name", columns="day_offset",
-                values="sample_count", aggfunc="first",
+                values="regional_score", aggfunc="first",
             )
-            pivot_count.columns = [f"j+{c}" for c in pivot_count.columns]
+            pivot_reg.columns = [f"j+{c}" for c in pivot_reg.columns]
 
-            pivot_risk = df_beaches.pivot_table(
+            pivot_prox = df_beaches.pivot_table(
                 index="beach_name", columns="day_offset",
-                values="risk_level", aggfunc="first",
+                values="closest_km", aggfunc="first",
             )
-            pivot_risk.columns = [f"j+{c}" for c in pivot_risk.columns]
+            pivot_prox.columns = [f"j+{c}" for c in pivot_prox.columns]
 
-            z = pivot_risk.map(lambda x: RISK_NUM.get(x, 0))
+            # Texte de cellule : "17.9 / 36km"
+            text_vals = pivot_reg.round(1).astype(str) + "<br>" + pivot_prox.round(0).astype(int).astype(str) + " km"
 
             fig_heat = go.Figure(data=go.Heatmap(
-                z=z.values,
-                x=z.columns.tolist(),
-                y=z.index.tolist(),
+                z=pivot_reg.values,
+                x=pivot_reg.columns.tolist(),
+                y=pivot_reg.index.tolist(),
                 colorscale=[
-                    [0.00, "#00c800"],
-                    [0.33, "#c8c800"],
-                    [0.66, "#c86400"],
-                    [1.00, "#c80000"],
+                    [0.000, "#00c800"],   # none  < 5
+                    [0.067, "#c8c800"],   # low   ≥ 5   (5/75)
+                    [0.333, "#c86400"],   # medium ≥ 25 (25/75)
+                    [1.000, "#c80000"],   # high  ≥ 75
                 ],
-                zmin=0, zmax=3,
-                text=pivot_count.values,
-                texttemplate="%{text}pt",
-                showscale=False,
+                zmin=0, zmax=75,
+                text=text_vals.values,
+                texttemplate="%{text}",
+                showscale=True,
+                colorbar=dict(title="Score<br>régional", thickness=14),
                 hovertemplate=(
                     "<b>%{y}</b><br>%{x}<br>"
-                    "%{text} particules<extra></extra>"
+                    "regional_score : %{z:.1f}<extra></extra>"
                 ),
             ))
             fig_heat.update_layout(
@@ -858,16 +866,16 @@ elif page == "Plages":
         st.subheader(f"Détail — {selected_label}")
 
         detail = (
-            df_day[["beach_name", "radius_km", "sample_count",
-                     "est_count", "risk_level", "n_active", "n_particles"]]
+            df_day[["beach_name", "risk_level", "regional_score",
+                     "local_score", "closest_km", "radius_km", "est_count"]]
             .rename(columns={
-                "beach_name":   "Plage",
-                "radius_km":    "Rayon (km)",
-                "sample_count": "Ptcl. échantillon",
-                "est_count":    "Ptcl. estimées",
-                "risk_level":   "Risque",
-                "n_active":     "Actives (sim.)",
-                "n_particles":  "Total semées",
+                "beach_name":      "Plage",
+                "risk_level":      "Risque",
+                "regional_score":  "Score régional (σ=50km)",
+                "local_score":     "Score local (σ=r)",
+                "closest_km":      "Particule la + proche (km)",
+                "radius_km":       "Rayon (km)",
+                "est_count":       "Ptcl. estimées",
             })
             .reset_index(drop=True)
         )

@@ -24,8 +24,8 @@ CAMERAS = [
     {"name": "Maho_Beach",          "key": "mahobeach",                  "island": "Saint-Martin"},
 ]
 
-OUTPUT_DIR = Path("./captures")
-DB_PATH    = Path("./sargassum_data.db")
+OUTPUT_DIR = Path(__file__).parent / "captures"
+DB_PATH    = Path(__file__).parent / "sargassum_data.db"
 
 
 def _get_db_conn():

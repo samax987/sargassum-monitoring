@@ -2,7 +2,8 @@
 """
 beaches.py
 ==========
-Coordonnées GPS des principales plages de Saint-Barthélemy
+Coordonnées GPS des principales plages des Antilles françaises
+(Saint-Barthélemy, Martinique, Guadeloupe, Marie-Galante)
 et calcul du risque d'échouage de sargasses par plage.
 
 Le calcul s'appuie sur les snapshots de dérive (drift_predictions) produits
@@ -39,27 +40,57 @@ DAY_OFFSETS      = [0, 1, 2, 3]
 REGIONAL_SIGMA   = 50.0   # km — bandwidth pour le score d'approche
 
 # Seuils sur regional_score (population extrapolée, σ = 50 km)
-# Calibration :
-#   1 particule à 50 km  → regional_score ≈ 8.7
-#   1 particule à 36 km  → regional_score ≈ 11
-#   5 particules à 50 km → regional_score ≈ 43
-#  10 particules à 50 km → regional_score ≈ 87
 RISK_THRESHOLDS = {"low": 5.0, "medium": 25.0, "high": 75.0}
 
 
-# ── Plages de Saint-Barthélemy ─────────────────────────────────────────────────
+# ── Plages — Antilles françaises ───────────────────────────────────────────────
 
 BEACHES = [
-    {"name": "Flamands",         "lat": 17.9067, "lon": -62.8467, "radius_km": 3.0},
-    {"name": "Colombier",        "lat": 17.9033, "lon": -62.8600, "radius_km": 2.0},
-    {"name": "Saint-Jean",       "lat": 17.9000, "lon": -62.8267, "radius_km": 4.0},
-    {"name": "Lorient",          "lat": 17.9000, "lon": -62.8100, "radius_km": 3.0},
-    {"name": "Grand_Cul-de-Sac", "lat": 17.9117, "lon": -62.7917, "radius_km": 3.0},
-    {"name": "Petit_Cul-de-Sac", "lat": 17.9067, "lon": -62.7967, "radius_km": 2.0},
-    {"name": "Toiny",            "lat": 17.8933, "lon": -62.7817, "radius_km": 2.0},
-    {"name": "Gouverneur",       "lat": 17.8717, "lon": -62.8433, "radius_km": 3.0},
-    {"name": "Grande_Saline",    "lat": 17.8717, "lon": -62.8267, "radius_km": 3.0},
-    {"name": "Marigot",          "lat": 17.9033, "lon": -62.8067, "radius_km": 2.0},
+    # ── Saint-Barthélemy ──────────────────────────────────────────────────────
+    {"island": "Saint-Barth", "name": "Flamands",          "lat": 17.9067, "lon": -62.8467, "radius_km": 3.0},
+    {"island": "Saint-Barth", "name": "Colombier",         "lat": 17.9033, "lon": -62.8600, "radius_km": 2.0},
+    {"island": "Saint-Barth", "name": "Saint-Jean",        "lat": 17.9000, "lon": -62.8267, "radius_km": 4.0},
+    {"island": "Saint-Barth", "name": "Lorient",           "lat": 17.9000, "lon": -62.8100, "radius_km": 3.0},
+    {"island": "Saint-Barth", "name": "Grand_Cul-de-Sac",  "lat": 17.9117, "lon": -62.7917, "radius_km": 3.0},
+    {"island": "Saint-Barth", "name": "Petit_Cul-de-Sac",  "lat": 17.9067, "lon": -62.7967, "radius_km": 2.0},
+    {"island": "Saint-Barth", "name": "Toiny",             "lat": 17.8933, "lon": -62.7817, "radius_km": 2.0},
+    {"island": "Saint-Barth", "name": "Gouverneur",        "lat": 17.8717, "lon": -62.8433, "radius_km": 3.0},
+    {"island": "Saint-Barth", "name": "Grande_Saline",     "lat": 17.8717, "lon": -62.8267, "radius_km": 3.0},
+    {"island": "Saint-Barth", "name": "Marigot",           "lat": 17.9033, "lon": -62.8067, "radius_km": 2.0},
+
+    # ── Martinique ────────────────────────────────────────────────────────────
+    {"island": "Martinique", "name": "Les_Salines",        "lat": 14.3917, "lon": -60.8617, "radius_km": 3.0},
+    {"island": "Martinique", "name": "Grande_Anse",        "lat": 14.4867, "lon": -61.0867, "radius_km": 3.0},
+    {"island": "Martinique", "name": "Anse_Noire",         "lat": 14.4817, "lon": -61.0783, "radius_km": 2.0},
+    {"island": "Martinique", "name": "Anse_Mitan",         "lat": 14.5483, "lon": -61.0567, "radius_km": 2.5},
+    {"island": "Martinique", "name": "Anse_a_l_Ane",       "lat": 14.5333, "lon": -61.0683, "radius_km": 2.0},
+    {"island": "Martinique", "name": "Diamant",            "lat": 14.4667, "lon": -61.0233, "radius_km": 3.5},
+    {"island": "Martinique", "name": "Tartane",            "lat": 14.7533, "lon": -60.8750, "radius_km": 2.5},
+    {"island": "Martinique", "name": "Trinite",            "lat": 14.7383, "lon": -60.9700, "radius_km": 2.0},
+    {"island": "Martinique", "name": "Le_Vauclin",         "lat": 14.5550, "lon": -60.8383, "radius_km": 2.5},
+    {"island": "Martinique", "name": "Sainte-Luce",        "lat": 14.4717, "lon": -60.9217, "radius_km": 2.5},
+    {"island": "Martinique", "name": "Le_Marin",           "lat": 14.4700, "lon": -60.8733, "radius_km": 2.0},
+    {"island": "Martinique", "name": "Cap_Chevalier",      "lat": 14.4900, "lon": -60.8567, "radius_km": 2.0},
+    {"island": "Martinique", "name": "Anse_Cafard",        "lat": 14.4433, "lon": -61.0533, "radius_km": 2.0},
+
+    # ── Guadeloupe ────────────────────────────────────────────────────────────
+    {"island": "Guadeloupe", "name": "Grande_Anse_Deshaies",  "lat": 16.3050, "lon": -61.7950, "radius_km": 2.5},
+    {"island": "Guadeloupe", "name": "Malendure",             "lat": 16.1900, "lon": -61.7400, "radius_km": 2.0},
+    {"island": "Guadeloupe", "name": "Caravelle_Ste-Anne",    "lat": 16.2233, "lon": -61.3817, "radius_km": 3.0},
+    {"island": "Guadeloupe", "name": "Souffleur_Port-Louis",  "lat": 16.4183, "lon": -61.5400, "radius_km": 2.0},
+    {"island": "Guadeloupe", "name": "Trois-Rivieres",        "lat": 15.9800, "lon": -61.6617, "radius_km": 2.0},
+    {"island": "Guadeloupe", "name": "Saint-Francois",        "lat": 16.2533, "lon": -61.2767, "radius_km": 3.0},
+    {"island": "Guadeloupe", "name": "Gosier",                "lat": 16.2067, "lon": -61.4967, "radius_km": 2.5},
+    {"island": "Guadeloupe", "name": "Anse_Bertrand",         "lat": 16.4717, "lon": -61.5267, "radius_km": 2.0},
+    {"island": "Guadeloupe", "name": "Anse_Bourg_Deshaies",   "lat": 16.3017, "lon": -61.7967, "radius_km": 1.5},
+    {"island": "Guadeloupe", "name": "Plage_de_Viard",        "lat": 16.1083, "lon": -61.5933, "radius_km": 2.0},
+
+    # ── Marie-Galante ─────────────────────────────────────────────────────────
+    {"island": "Marie-Galante", "name": "Capesterre",   "lat": 15.9217, "lon": -61.2033, "radius_km": 2.0},
+    {"island": "Marie-Galante", "name": "Saint-Louis",  "lat": 15.9633, "lon": -61.2983, "radius_km": 2.0},
+    {"island": "Marie-Galante", "name": "Grand-Bourg",  "lat": 15.8833, "lon": -61.3133, "radius_km": 2.5},
+    {"island": "Marie-Galante", "name": "Anse_Ballet",  "lat": 15.9367, "lon": -61.3200, "radius_km": 2.0},
+    {"island": "Marie-Galante", "name": "Anse_Canot",   "lat": 15.9683, "lon": -61.2733, "radius_km": 2.0},
 ]
 
 
@@ -83,25 +114,8 @@ def _score_beach(
     beach_lat: float,
     beach_lon: float,
     radius_km: float,
-    ratio: float,          # n_active / n_sample — facteur d'extrapolation
+    ratio: float,
 ) -> dict:
-    """
-    Calcule tous les indicateurs de risque pour une plage.
-
-    Paramètres
-    ----------
-    positions  : liste [[lon, lat], …] — échantillon ≤ 500 pts
-    ratio      : n_active / n_sample  — chaque pt représente `ratio` particules réelles
-
-    Retourne
-    --------
-    sample_count   : nb de particules (échantillon) dans radius_km
-    est_count      : extrapolé = sample_count × ratio
-    local_score    : Σ Gauss(d, σ=radius_km) × ratio  — champ proche
-    regional_score : Σ Gauss(d, σ=50 km)    × ratio  — approche régionale
-    closest_km     : distance à la particule la plus proche (None si aucune)
-    density_km2    : est_count / (π × radius_km²)
-    """
     sample_count    = 0
     local_gauss_sum = 0.0
     reg_gauss_sum   = 0.0
@@ -117,7 +131,6 @@ def _score_beach(
         if d <= radius_km:
             sample_count += 1
 
-        # Gaussiennes : exp(-d²/(2σ²))
         local_gauss_sum += math.exp(-0.5 * (d / radius_km)    ** 2)
         reg_gauss_sum   += math.exp(-0.5 * (d / REGIONAL_SIGMA) ** 2)
 
@@ -139,7 +152,6 @@ def _score_beach(
 
 
 def risk_label(regional_score: float) -> str:
-    """Niveau de risque basé sur le regional_score (population extrapolée)."""
     if regional_score >= RISK_THRESHOLDS["high"]:
         return "high"
     if regional_score >= RISK_THRESHOLDS["medium"]:
@@ -156,6 +168,7 @@ CREATE TABLE IF NOT EXISTS beach_risk_scores (
     id             INTEGER PRIMARY KEY AUTOINCREMENT,
     computed_at    TEXT    NOT NULL,
     simulated_at   TEXT    NOT NULL,
+    island         TEXT,
     beach_name     TEXT    NOT NULL,
     beach_lat      REAL    NOT NULL,
     beach_lon      REAL    NOT NULL,
@@ -174,8 +187,8 @@ CREATE TABLE IF NOT EXISTS beach_risk_scores (
 );
 """
 
-# Colonnes ajoutées après la version initiale (migration idempotente)
 _NEW_COLUMNS = [
+    ("island",         "TEXT"),
     ("local_score",    "REAL"),
     ("regional_score", "REAL"),
     ("closest_km",     "REAL"),
@@ -186,7 +199,6 @@ _NEW_COLUMNS = [
 def _get_conn(db_path: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path)
     conn.executescript(_SCHEMA)
-    # Migration : ajoute les nouvelles colonnes si absentes
     existing = {row[1] for row in conn.execute("PRAGMA table_info(beach_risk_scores)")}
     for col, typedef in _NEW_COLUMNS:
         if col not in existing:
@@ -199,10 +211,6 @@ def _get_conn(db_path: Path) -> sqlite3.Connection:
 # ── Calcul des scores ─────────────────────────────────────────────────────────
 
 def compute_beach_scores(db_path: Path = DB_PATH) -> int:
-    """
-    Charge la simulation la plus récente, calcule les scores densité-aware
-    pour chaque plage × j+0…j+3, et stocke dans beach_risk_scores.
-    """
     conn = _get_conn(db_path)
 
     row = conn.execute(
@@ -251,6 +259,7 @@ def compute_beach_scores(db_path: Path = DB_PATH) -> int:
                              beach["radius_km"], ratio)
             rows_to_insert.append((
                 computed_at, simulated_at,
+                beach.get("island", ""),
                 beach["name"], beach["lat"], beach["lon"], beach["radius_km"],
                 day,
                 s["sample_count"], n_sample, n_active, n_particles,
@@ -261,11 +270,12 @@ def compute_beach_scores(db_path: Path = DB_PATH) -> int:
 
     conn.executemany(
         """INSERT INTO beach_risk_scores
-           (computed_at, simulated_at, beach_name, beach_lat, beach_lon,
+           (computed_at, simulated_at, island,
+            beach_name, beach_lat, beach_lon,
             radius_km, day_offset, sample_count, n_sample, n_active,
             n_particles, est_count, local_score, regional_score,
             closest_km, density_km2, risk_level)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         rows_to_insert,
     )
     conn.commit()
@@ -288,12 +298,12 @@ def print_report(db_path: Path = DB_PATH) -> None:
     last = row["last"]
 
     scores = conn.execute(
-        """SELECT beach_name, day_offset, sample_count, est_count,
+        """SELECT island, beach_name, day_offset, sample_count, est_count,
                   local_score, regional_score, closest_km,
                   density_km2, risk_level, radius_km, n_active, n_particles, n_sample
            FROM beach_risk_scores
            WHERE computed_at = ?
-           ORDER BY beach_name, day_offset""",
+           ORDER BY island, beach_name, day_offset""",
         (last,),
     ).fetchall()
     conn.close()
@@ -304,42 +314,43 @@ def print_report(db_path: Path = DB_PATH) -> None:
 
     ICONS = {"none": "🟢", "low": "🟡", "medium": "🟠", "high": "🔴"}
     days  = sorted({r["day_offset"] for r in scores})
-    by_beach: dict[str, list] = {}
+
+    # Grouper par île
+    by_island: dict[str, dict[str, list]] = {}
     for r in scores:
-        by_beach.setdefault(r["beach_name"], []).append(r)
+        island = r["island"] or "?"
+        by_island.setdefault(island, {})
+        by_island[island].setdefault(r["beach_name"], []).append(r)
 
-    print(f"\n{'═'*72}")
-    print(f"  🏖️  Risque sargasses — Saint-Barthélemy  (calculé {last})")
-    print(f"{'═'*72}")
-
-    # En-tête
-    header = f"{'Plage':<20}" + "".join(
-        f"  {'j+'+str(d):<18}" for d in days
-    )
-    print(header)
-    sub = f"{'':20}" + "".join(
-        f"  {'rég / loc / prox':18}" for _ in days
-    )
-    print(sub)
-    print("─" * len(header))
-
-    for beach_name, beach_scores in by_beach.items():
-        line = f"{beach_name:<20}"
-        for d in days:
-            s = next((x for x in beach_scores if x["day_offset"] == d), None)
-            if s:
-                icon  = ICONS.get(s["risk_level"], "?")
-                prox  = f"{s['closest_km']:.0f}km" if s["closest_km"] is not None else "—"
-                line += (f"  {icon} {s['regional_score']:5.1f}"
-                         f" /{s['local_score']:5.1f}"
-                         f" /{prox:>5}")
-            else:
-                line += "  " + "—" * 18
-        print(line)
-
-    print()
     r0 = scores[0]
     ratio = (r0["n_active"] or 0) / (r0["n_sample"] or 1) if r0["n_sample"] else 0
+
+    for island, beaches in by_island.items():
+        print(f"\n{'═'*72}")
+        print(f"  🏖️  Risque sargasses — {island}  (calculé {last})")
+        print(f"{'═'*72}")
+
+        header = f"{'Plage':<22}" + "".join(f"  {'j+'+str(d):<18}" for d in days)
+        sub    = f"{'':22}" + "".join(f"  {'rég / loc / prox':18}" for _ in days)
+        print(header)
+        print(sub)
+        print("─" * len(header))
+
+        for beach_name, beach_scores in beaches.items():
+            line = f"{beach_name:<22}"
+            for d in days:
+                s = next((x for x in beach_scores if x["day_offset"] == d), None)
+                if s:
+                    icon  = ICONS.get(s["risk_level"], "?")
+                    prox  = f"{s['closest_km']:.0f}km" if s["closest_km"] is not None else "—"
+                    line += (f"  {icon} {s['regional_score']:5.1f}"
+                             f" /{s['local_score']:5.1f}"
+                             f" /{prox:>5}")
+                else:
+                    line += "  " + "—" * 18
+            print(line)
+
+    print()
     print(f"  Simulation  : {r0['n_particles']} particules | "
           f"{r0['n_active']} actives | "
           f"échantillon {r0['n_sample']} pts (×{ratio:.1f})")
@@ -367,7 +378,9 @@ if __name__ == "__main__":
         print_report(db)
         sys.exit(0)
 
-    print("\n🏖️  Calcul des scores de risque — plages de Saint-Barthélemy")
+    n_islands = len({b["island"] for b in BEACHES})
+    n_beaches = len(BEACHES)
+    print(f"\n🏖️  Calcul des scores de risque — {n_islands} îles, {n_beaches} plages")
     n = compute_beach_scores(db)
     if n > 0:
         print(f"  ✅ {n} scores insérés dans beach_risk_scores")

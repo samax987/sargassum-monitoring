@@ -92,6 +92,16 @@ def get_last_collected(db_path: str) -> str:
     return last or "—"
 
 
+
+# ── Configuration carte par île ───────────────────────────────────────────────
+
+ISLAND_MAP_CONFIG = {
+    Saint-Barth:   {center: [17.897, -62.833], zoom: 11},
+    Martinique:    {center: [14.607, -61.009], zoom: 10},
+    Guadeloupe:    {center: [16.249, -61.534], zoom: 10},
+    Marie-Galante: {center: [15.927, -61.273], zoom: 11},
+}
+
 # ── Loaders SQLite (cached) ───────────────────────────────────────────────────
 
 @st.cache_data(show_spinner=False, ttl=300)
@@ -275,7 +285,7 @@ def load_beach_scores(db_path: str) -> pd.DataFrame:
         df = pd.read_sql_query(
             """SELECT * FROM beach_risk_scores
                WHERE computed_at = ?
-               ORDER BY beach_name, day_offset""",
+               ORDER BY island, beach_name, day_offset""",
             conn,
             params=(computed_at,),
         )
@@ -745,6 +755,15 @@ elif page == "Plages":
             f"{n_particles:,} particules semées"
         )
 
+        # Sélecteur d'île
+        if "island" in df_beaches.columns and df_beaches["island"].notna().any():
+            available_islands = sorted(df_beaches["island"].dropna().unique().tolist())
+        else:
+            available_islands = ["Saint-Barth"]
+        selected_island = st.selectbox("Île", available_islands)
+        df_beaches = df_beaches[df_beaches["island"] == selected_island].copy() if "island" in df_beaches.columns else df_beaches
+        map_cfg = ISLAND_MAP_CONFIG.get(selected_island, ISLAND_MAP_CONFIG["Saint-Barth"])
+
         # Sélecteur de jour
         available_days = sorted(df_beaches["day_offset"].unique().tolist())
         day_labels = [f"j+{d}" for d in available_days]
@@ -763,8 +782,8 @@ elif page == "Plages":
         with col_map:
             st.subheader(f"Carte — {selected_label}")
             m_beach = Map(
-                location=[17.897, -62.833],
-                zoom_start=11,
+                location=map_cfg["center"],
+                zoom_start=map_cfg["zoom"],
                 tiles="CartoDB positron",
             )
             for _, brow in df_day.iterrows():

@@ -96,10 +96,10 @@ def get_last_collected(db_path: str) -> str:
 # ── Configuration carte par île ───────────────────────────────────────────────
 
 ISLAND_MAP_CONFIG = {
-    Saint-Barth:   {center: [17.897, -62.833], zoom: 11},
-    Martinique:    {center: [14.607, -61.009], zoom: 10},
-    Guadeloupe:    {center: [16.249, -61.534], zoom: 10},
-    Marie-Galante: {center: [15.927, -61.273], zoom: 11},
+    "Saint-Barth":   {"center": [17.897, -62.833], "zoom": 11},
+    "Martinique":    {"center": [14.607, -61.009], "zoom": 10},
+    "Guadeloupe":    {"center": [16.249, -61.534], "zoom": 10},
+    "Marie-Galante": {"center": [15.927, -61.273], "zoom": 11},
 }
 
 # ── Loaders SQLite (cached) ───────────────────────────────────────────────────

@@ -94,7 +94,7 @@ def get_last_collected(db_path: str) -> str:
 
 # ── Loaders SQLite (cached) ───────────────────────────────────────────────────
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, ttl=300)
 def load_noaa_sir(db_path: str) -> pd.DataFrame:
     """Charge les rapports NOAA SIR, triés du plus récent au plus ancien."""
     try:
@@ -111,7 +111,7 @@ def load_noaa_sir(db_path: str) -> pd.DataFrame:
         return pd.DataFrame()
 
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, ttl=300)
 def load_afai(db_path: str) -> pd.DataFrame:
     """Charge les données AFAI triées par date, avec conversion en Timestamp."""
     try:
@@ -130,7 +130,7 @@ def load_afai(db_path: str) -> pd.DataFrame:
         return pd.DataFrame()
 
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, ttl=300)
 def load_copernicus(db_path: str) -> pd.DataFrame:
     """Charge les courants Copernicus triés par date."""
     try:
@@ -147,7 +147,7 @@ def load_copernicus(db_path: str) -> pd.DataFrame:
         return pd.DataFrame()
 
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, ttl=300)
 def load_aviso(db_path: str) -> pd.DataFrame:
     """Charge les courants AVISO géostrophiques triés par date."""
     try:
@@ -164,7 +164,7 @@ def load_aviso(db_path: str) -> pd.DataFrame:
         return pd.DataFrame()
 
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, ttl=300)
 def load_drift(db_path: str) -> pd.DataFrame:
     """
     Charge les prédictions de dérive de la simulation la plus récente,
@@ -196,7 +196,7 @@ def load_drift(db_path: str) -> pd.DataFrame:
         return pd.DataFrame()
 
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, ttl=300)
 def load_foresea(db_path: str) -> pd.DataFrame:
     """Charge la dernière entrée FORESEA CNRS."""
     try:
@@ -213,7 +213,7 @@ def load_foresea(db_path: str) -> pd.DataFrame:
         return pd.DataFrame()
 
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, ttl=300)
 def load_sargassum_monitoring(db_path: str) -> pd.DataFrame:
     """
     Charge les articles Sargassum Monitoring.
@@ -258,7 +258,7 @@ def load_sargassum_monitoring(db_path: str) -> pd.DataFrame:
         return pd.DataFrame()
 
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, ttl=300)
 def load_beach_scores(db_path: str) -> pd.DataFrame:
     """Charge les derniers scores de risque par plage depuis beach_risk_scores."""
     try:
@@ -285,7 +285,7 @@ def load_beach_scores(db_path: str) -> pd.DataFrame:
         return pd.DataFrame()
 
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, ttl=300)
 def load_webcam_latest(db_path: str) -> pd.DataFrame:
     """Retourne la dernière capture réussie par caméra (island, camera_name, file_path, captured_at)."""
     try:

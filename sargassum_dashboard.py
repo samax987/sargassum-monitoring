@@ -351,7 +351,7 @@ with st.sidebar:
 
     db_path = st.text_input("Base de données", value="./sargassum_data.db")
 
-    if st.button("Rafraîchir", use_container_width=True):
+    if st.button("Rafraîchir", width="stretch"):
         st.cache_data.clear()
         st.rerun()
 
@@ -580,7 +580,7 @@ elif page == "Métriques":
             line_color="gray",
         )
         fig_afai.update_layout(hovermode="x unified", height=300)
-        st.plotly_chart(fig_afai, use_container_width=True)
+        st.plotly_chart(fig_afai, width="stretch")
 
     # ── Graphique 2 : Vitesses Copernicus + AVISO ───────────────────────────────
     st.subheader("Vitesses des courants — Copernicus & AVISO")
@@ -614,7 +614,7 @@ elif page == "Métriques":
                 },
             )
             fig_spd.update_layout(hovermode="x unified", height=300)
-            st.plotly_chart(fig_spd, use_container_width=True)
+            st.plotly_chart(fig_spd, width="stretch")
         else:
             st.warning("Données insuffisantes pour le graphique de vitesses.")
 
@@ -641,7 +641,7 @@ elif page == "Actualités":
                 st.markdown(f"[{sir_url}]({sir_url})")
         with col_btn:
             if sir_url:
-                st.link_button("Télécharger le PDF", url=sir_url, use_container_width=True)
+                st.link_button("Télécharger le PDF", url=sir_url, width="stretch")
 
         extra_raw = sir_row.get("extra_files", "[]") or "[]"
         try:
@@ -839,7 +839,7 @@ elif page == "Plages":
                 margin=dict(l=10, r=10, t=10, b=10),
                 yaxis=dict(autorange="reversed"),
             )
-            st.plotly_chart(fig_heat, use_container_width=True)
+            st.plotly_chart(fig_heat, width="stretch")
 
             # Légende
             legend_items = [
@@ -879,7 +879,7 @@ elif page == "Plages":
             })
             .reset_index(drop=True)
         )
-        st.dataframe(detail, use_container_width=True, hide_index=True)
+        st.dataframe(detail, width="stretch", hide_index=True)
 
 
 # ── Page 5 : Webcams ──────────────────────────────────────────────────────────
@@ -929,7 +929,7 @@ elif page == "Webcams":
                     )
                     conn_hist.close()
                     if not df_hist.empty:
-                        st.dataframe(df_hist, use_container_width=True, hide_index=True)
+                        st.dataframe(df_hist, width="stretch", hide_index=True)
                     else:
                         st.info("Aucune capture dans les dernières 24 heures.")
                 except Exception:

@@ -36,7 +36,7 @@ from pathlib import Path
 # ── Configuration ─────────────────────────────────────────────────────────────
 
 DB_PATH          = Path("./sargassum_data.db")
-DAY_OFFSETS      = [0, 1, 2, 3]
+DAY_OFFSETS      = [0, 1, 2, 3, 4, 5]
 REGIONAL_SIGMA   = 50.0   # km — bandwidth pour le score d'approche
 
 # Seuils sur regional_score (population extrapolée, σ = 50 km)
@@ -289,6 +289,17 @@ def compute_beach_scores(db_path: Path = DB_PATH) -> int:
         rows_to_insert,
     )
     conn.commit()
+
+    # Purge : conserver uniquement les 60 derniers computed_at distincts
+    conn.execute("""
+        DELETE FROM beach_risk_scores
+        WHERE computed_at NOT IN (
+            SELECT DISTINCT computed_at FROM beach_risk_scores
+            ORDER BY computed_at DESC LIMIT 60
+        )
+    """)
+    conn.commit()
+
     conn.close()
     return len(rows_to_insert)
 

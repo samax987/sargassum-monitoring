@@ -3,6 +3,7 @@ set -e
 PYTHON=/opt/sargassum/venv/bin/python3
 DIR=/opt/sargassum
 
+mkdir -p "$DIR/logs"
 cd "$DIR"
 echo ""
 echo "──────────────────────────────────────────────"
@@ -18,5 +19,9 @@ echo "[2/3] Simulation de dérive OpenDrift…"
 
 echo "[3/3] Calcul des scores de plage…"
 "$PYTHON" "$DIR/beaches.py"
+
+echo "[4/4] Alertes Telegram…"
+"$PYTHON" "$DIR/sargassum_alert.py" || \
+    echo "  ⚠️  Alerte Telegram échouée — non bloquant"
 
 echo "✅  Run terminé — $(date -u '+%Y-%m-%dT%H:%M:%SZ')"

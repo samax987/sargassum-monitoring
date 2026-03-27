@@ -21,7 +21,8 @@ CAMERAS = [
     {"name": "Flamand_Beach",       "key": "st-barth-flamand-beach",     "island": "Saint-Barth",  "url": YT_THUMB.format(yt_id="DATTZ-F82Zk")},
     # Baie_Saint-Jean : offline (serveur HTTP 500) — retirée temporairement
     {"name": "Anses_Arlet",         "key": "ansesdarlet",                "island": "Martinique",   "url": "https://s1.vision-environnement.com/live/modules/timelapse/captureptz/ansesdarlet.jpg"},
-    {"name": "Maho_Beach",          "key": "mahobeach",                  "island": "Saint-Martin"},
+    # Maho_Beach : image figée depuis mars 2024 (Last-Modified statique) — désactivée
+    # {"name": "Maho_Beach",        "key": "mahobeach",                  "island": "Saint-Martin"},
 ]
 
 OUTPUT_DIR = Path(__file__).parent / "captures"

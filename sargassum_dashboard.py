@@ -97,6 +97,7 @@ def get_last_collected(db_path: str) -> str:
 
 ISLAND_MAP_CONFIG = {
     "Saint-Barth":   {"center": [17.897, -62.833], "zoom": 11},
+    "Saint-Martin":  {"center": [18.075, -63.060], "zoom": 12},
     "Martinique":    {"center": [14.607, -61.009], "zoom": 10},
     "Guadeloupe":    {"center": [16.249, -61.534], "zoom": 10},
     "Marie-Galante": {"center": [15.927, -61.273], "zoom": 11},
@@ -371,7 +372,7 @@ with st.sidebar:
     st.divider()
     page = st.radio(
         "Navigation",
-        ["Carte", "Métriques", "Actualités", "Plages", "Webcams"],
+        ["Carte", "Métriques", "Actualités", "Plages", "Webcams", "Observations"],
         label_visibility="collapsed",
     )
 
@@ -733,10 +734,10 @@ elif page == "Actualités":
                     st.write(html.unescape(excerpt))
 
 
-# ── Page 4 : Risque plages Saint-Barth ───────────────────────────────────────
+# ── Page 4 : Risque plages (toutes îles) ─────────────────────────────────────
 
 elif page == "Plages":
-    st.header("Risque sargasses — Plages de Saint-Barth")
+    st.header("Risque sargasses — Plages")
 
     df_beaches = load_beach_scores(db_path)
 
@@ -953,3 +954,179 @@ elif page == "Webcams":
                         st.info("Aucune capture dans les dernières 24 heures.")
                 except Exception:
                     st.warning("Impossible de charger l'historique.")
+
+# ── Page 6 : Observations terrain ─────────────────────────────────────────────
+
+elif page == "Observations":
+    import datetime as _dt
+
+    # ── Schéma DB ─────────────────────────────────────────────────────────────
+    def _ensure_obs_table(db_path: str):
+        conn = sqlite3.connect(db_path)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS beach_observations (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                observed_at   TEXT NOT NULL,
+                island        TEXT NOT NULL,
+                beach_name    TEXT NOT NULL,
+                observed_risk TEXT NOT NULL,
+                coverage_pct  INTEGER,
+                notes         TEXT,
+                source        TEXT DEFAULT 'terrain'
+            )
+        """)
+        conn.commit()
+        conn.close()
+
+    _ensure_obs_table(db_path)
+
+    # ── Plages disponibles (depuis beaches.py) ─────────────────────────────────
+    BEACHES_BY_ISLAND = {
+        "Saint-Barth": [
+            "Flamands", "Colombier", "Saint-Jean", "Lorient",
+            "Grand_Cul-de-Sac", "Petit_Cul-de-Sac", "Toiny",
+            "Gouverneur", "Grande_Saline", "Marigot",
+        ],
+        "Saint-Martin": [
+            "Orient_Bay", "Grand_Case", "Friar_s_Bay", "Cupecoy",
+            "Mullet_Bay", "Baie_Longue", "Anse_Marcel", "Cul_de_Sac",
+        ],
+        "Martinique": [
+            "Les_Salines", "Grande_Anse", "Anse_Noire", "Anse_Mitan",
+            "Anse_a_l_Ane", "Diamant", "Tartane", "Trinite",
+            "Le_Vauclin", "Sainte-Luce", "Le_Marin", "Cap_Chevalier", "Anse_Cafard",
+        ],
+        "Guadeloupe": [
+            "Grande_Anse_Deshaies", "Malendure", "Caravelle_Ste-Anne",
+            "Souffleur_Port-Louis", "Trois-Rivieres", "Saint-Francois",
+            "Gosier", "Anse_Bertrand", "Anse_Bourg_Deshaies", "Plage_de_Viard",
+        ],
+        "Marie-Galante": [
+            "Capesterre", "Saint-Louis", "Grand-Bourg", "Anse_Ballet", "Anse_Canot",
+        ],
+    }
+
+    RISK_OPTIONS = {
+        "🟢 Aucun — plage propre":        "none",
+        "🟡 Faible — quelques laisses":    "low",
+        "🟠 Moyen — bande visible":        "medium",
+        "🔴 Fort — échouage massif":       "high",
+    }
+
+    # ── CSS mobile ────────────────────────────────────────────────────────────
+    st.markdown("""
+    <style>
+    div[data-testid="stRadio"] label {
+        font-size: 1.15rem !important;
+        padding: 0.4rem 0 !important;
+    }
+    div[data-testid="stSelectbox"] select {
+        font-size: 1.1rem !important;
+    }
+    button[kind="primary"] {
+        width: 100% !important;
+        font-size: 1.2rem !important;
+        padding: 0.7rem !important;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+    st.header("📍 Observation terrain")
+    st.caption("Saisie rapide depuis la plage — les données calibrent les prédictions.")
+
+    st.divider()
+
+    # ── Formulaire ────────────────────────────────────────────────────────────
+    with st.form("obs_form", clear_on_submit=True):
+        col1, col2 = st.columns(2)
+        with col1:
+            sel_island = st.selectbox("Île", list(BEACHES_BY_ISLAND.keys()), index=0)
+        with col2:
+            sel_beach = st.selectbox("Plage", BEACHES_BY_ISLAND[sel_island])
+
+        sel_risk_label = st.radio(
+            "Niveau observé",
+            list(RISK_OPTIONS.keys()),
+            horizontal=False,
+        )
+        sel_risk = RISK_OPTIONS[sel_risk_label]
+
+        col3, col4 = st.columns(2)
+        with col3:
+            sel_date = st.date_input("Date", value=_dt.date.today())
+        with col4:
+            sel_time = st.time_input("Heure (locale)", value=_dt.datetime.now().time())
+
+        sel_coverage = st.slider(
+            "Couverture estimée (%)",
+            min_value=0, max_value=100, value=0, step=5,
+            help="% du linéaire de plage recouvert de sargasses",
+        )
+
+        sel_notes = st.text_area(
+            "Notes (optionnel)",
+            placeholder="Ex: bande de 1m en haut de plage, odeur forte, algues fraîches…",
+            height=80,
+        )
+
+        submitted = st.form_submit_button("✅ Enregistrer l'observation", type="primary")
+
+    if submitted:
+        observed_at = _dt.datetime.combine(sel_date, sel_time).strftime("%Y-%m-%dT%H:%M:%S")
+        conn_w = sqlite3.connect(db_path)
+        conn_w.execute(
+            """INSERT INTO beach_observations
+               (observed_at, island, beach_name, observed_risk, coverage_pct, notes, source)
+               VALUES (?, ?, ?, ?, ?, ?, 'terrain')""",
+            (observed_at, sel_island, sel_beach, sel_risk,
+             sel_coverage if sel_coverage > 0 else None,
+             sel_notes.strip() or None),
+        )
+        conn_w.commit()
+        conn_w.close()
+        st.success(f"Observation enregistrée — {sel_beach} ({sel_island}) : **{sel_risk_label}** le {observed_at[:16]}")
+        st.balloons()
+
+    # ── Historique ────────────────────────────────────────────────────────────
+    st.divider()
+    st.subheader("Historique des observations")
+
+    conn_obs = get_connection(db_path)
+    if conn_obs:
+        try:
+            df_obs = pd.read_sql_query(
+                """SELECT observed_at, island, beach_name, observed_risk,
+                          coverage_pct, notes
+                   FROM beach_observations
+                   ORDER BY observed_at DESC
+                   LIMIT 100""",
+                conn_obs,
+            )
+            conn_obs.close()
+        except Exception:
+            df_obs = pd.DataFrame()
+
+    RISK_ICONS = {"none": "🟢", "low": "🟡", "medium": "🟠", "high": "🔴"}
+
+    if df_obs.empty:
+        st.info("Aucune observation enregistrée pour l'instant.")
+    else:
+        df_obs["niveau"] = df_obs["observed_risk"].map(RISK_ICONS) + " " + df_obs["observed_risk"]
+        df_obs["date"] = df_obs["observed_at"].str[:16].str.replace("T", " ")
+        df_obs["couverture"] = df_obs["coverage_pct"].apply(
+            lambda x: f"{int(x)}%" if pd.notna(x) else "—"
+        )
+        st.dataframe(
+            df_obs[["date", "island", "beach_name", "niveau", "couverture", "notes"]],
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "date":       st.column_config.TextColumn("Date"),
+                "island":     st.column_config.TextColumn("Île"),
+                "beach_name": st.column_config.TextColumn("Plage"),
+                "niveau":     st.column_config.TextColumn("Niveau"),
+                "couverture": st.column_config.TextColumn("Couverture"),
+                "notes":      st.column_config.TextColumn("Notes"),
+            },
+        )
+        st.caption(f"{len(df_obs)} observation(s) enregistrée(s)")

@@ -3,7 +3,7 @@
 beaches.py
 ==========
 Coordonnées GPS des principales plages des Antilles françaises
-(Saint-Barthélemy, Martinique, Guadeloupe, Marie-Galante)
+(Saint-Barthélemy, Martinique, Guadeloupe, Marie-Galante, Saint-Martin)
 et calcul du risque d'échouage de sargasses par plage.
 
 Le calcul s'appuie sur les snapshots de dérive (drift_predictions) produits
@@ -57,6 +57,16 @@ BEACHES = [
     {"island": "Saint-Barth", "name": "Gouverneur",        "lat": 17.8717, "lon": -62.8433, "radius_km": 3.0},
     {"island": "Saint-Barth", "name": "Grande_Saline",     "lat": 17.8717, "lon": -62.8267, "radius_km": 3.0},
     {"island": "Saint-Barth", "name": "Marigot",           "lat": 17.9033, "lon": -62.8067, "radius_km": 2.0},
+
+    # ── Saint-Martin ──────────────────────────────────────────────────────────
+    {"island": "Saint-Martin", "name": "Orient_Bay",         "lat": 18.0817, "lon": -63.0233, "radius_km": 4.0},
+    {"island": "Saint-Martin", "name": "Grand_Case",         "lat": 18.1000, "lon": -63.0567, "radius_km": 3.0},
+    {"island": "Saint-Martin", "name": "Friar_s_Bay",        "lat": 18.0733, "lon": -63.0767, "radius_km": 2.5},
+    {"island": "Saint-Martin", "name": "Cupecoy",            "lat": 18.0433, "lon": -63.1233, "radius_km": 2.0},
+    {"island": "Saint-Martin", "name": "Mullet_Bay",         "lat": 18.0483, "lon": -63.1183, "radius_km": 2.5},
+    {"island": "Saint-Martin", "name": "Baie_Longue",        "lat": 18.0500, "lon": -63.1100, "radius_km": 3.0},
+    {"island": "Saint-Martin", "name": "Anse_Marcel",        "lat": 18.1117, "lon": -63.0483, "radius_km": 2.0},
+    {"island": "Saint-Martin", "name": "Cul_de_Sac",         "lat": 18.0967, "lon": -63.0100, "radius_km": 2.5},
 
     # ── Martinique ────────────────────────────────────────────────────────────
     {"island": "Martinique", "name": "Les_Salines",        "lat": 14.3917, "lon": -60.8617, "radius_km": 3.0},

@@ -759,63 +759,41 @@ def simulate_drift(conn: sqlite3.Connection) -> bool:
 
     # ── 2. Téléchargement des champs de courants ──────────────────────────────
     end_dt   = datetime.now(timezone.utc)
-    # Les datasets NRT ont ~1-2 jours de délai : on prend les 3 derniers jours
-    start_dt = end_dt - timedelta(days=3)
-    sim_end  = end_dt + timedelta(days=5)
     fmt      = "%Y-%m-%dT%H:%M:%S"
 
     tmpdir = Path(tempfile.mkdtemp(prefix="sarg_drift_"))
     try:
-        # DUACS géostrophique → NetCDF temporaire
-        print("    → Téléchargement DUACS (courants géostrophiques)…")
-        ds_duacs = copernicusmarine.open_dataset(
-            dataset_id        = "cmems_obs-sl_glo_phy-ssh_nrt_allsat-l4-duacs-0.125deg_P1D",
-            username          = cp_user, password = cp_pass,
-            variables         = ["ugos", "vgos"],
-            minimum_latitude  = CARIB["lat_min"] - 3,
-            maximum_latitude  = CARIB["lat_max"] + 3,
-            minimum_longitude = CARIB["lon_min"] - 3,
-            maximum_longitude = CARIB["lon_max"] + 3,
-            start_datetime    = (end_dt - timedelta(days=2)).strftime(fmt),
-            end_datetime      = end_dt.strftime(fmt),
-        )
-        # Renommage → noms CF attendus par OpenDrift
-        ds_duacs = ds_duacs.rename({
-            "ugos": "x_sea_water_velocity",
-            "vgos": "y_sea_water_velocity",
-        })
-        duacs_nc = tmpdir / "duacs.nc"
-        ds_duacs.to_netcdf(duacs_nc)
-        ds_duacs.close()
-
-        # Copernicus courants totaux → NetCDF temporaire
-        print("    → Téléchargement Copernicus (courants totaux)…")
-        ds_cop = copernicusmarine.open_dataset(
-            dataset_id        = "cmems_obs-mob_glo_phy-cur_nrt_0.25deg_PT1H-i",
+        # CMEMS Global Ocean Physics Analysis + Forecast
+        # Couvre J-1 à J+6, donc toute la durée de simulation (5 jours)
+        print("    → Téléchargement CMEMS ANFC (analyse + prévision 5 jours)…")
+        ds_anfc = copernicusmarine.open_dataset(
+            dataset_id        = "cmems_mod_glo_phy-cur_anfc_0.083deg_P1D-m",
             username          = cp_user, password = cp_pass,
             variables         = ["uo", "vo"],
             minimum_latitude  = CARIB["lat_min"] - 3,
             maximum_latitude  = CARIB["lat_max"] + 3,
             minimum_longitude = CARIB["lon_min"] - 3,
             maximum_longitude = CARIB["lon_max"] + 3,
-            start_datetime    = start_dt.strftime(fmt),
-            end_datetime      = end_dt.strftime(fmt),
+            minimum_depth     = 0.5,
+            maximum_depth     = 0.5,
+            start_datetime    = (end_dt - timedelta(days=1)).strftime(fmt),
+            end_datetime      = (end_dt + timedelta(days=6)).strftime(fmt),
         )
-        ds_cop = ds_cop.rename({
+        # Renommage → noms CF attendus par OpenDrift
+        ds_anfc = ds_anfc.rename({
             "uo": "x_sea_water_velocity",
             "vo": "y_sea_water_velocity",
         })
-        cop_nc = tmpdir / "copernicus.nc"
-        ds_cop.to_netcdf(cop_nc)
-        ds_cop.close()
+        anfc_nc = tmpdir / "anfc.nc"
+        ds_anfc.to_netcdf(anfc_nc)
+        ds_anfc.close()
 
         # ── 3. Simulation OpenDrift ───────────────────────────────────────────
         print("    → Initialisation OpenDrift…")
-        reader_duacs = NCReader(str(duacs_nc))
-        reader_cop   = NCReader(str(cop_nc))
+        reader_anfc = NCReader(str(anfc_nc))
 
         od = OceanDrift(loglevel=50)      # silent
-        od.add_reader([reader_duacs, reader_cop])
+        od.add_reader([reader_anfc])
         od.set_config("general:use_auto_landmask", True)
 
         sim_start_naive = datetime.now(timezone.utc).replace(tzinfo=None)

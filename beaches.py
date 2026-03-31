@@ -94,6 +94,7 @@ BEACHES = [
     {"island": "Guadeloupe", "name": "Anse_Bertrand",         "lat": 16.4717, "lon": -61.5267, "radius_km": 2.0},
     {"island": "Guadeloupe", "name": "Anse_Bourg_Deshaies",   "lat": 16.3017, "lon": -61.7967, "radius_km": 1.5},
     {"island": "Guadeloupe", "name": "Plage_de_Viard",        "lat": 16.1083, "lon": -61.5933, "radius_km": 2.0},
+    {"island": "Guadeloupe", "name": "Le_Moule",              "lat": 16.3300, "lon": -61.3533, "radius_km": 3.0},
 
     # ── Marie-Galante ─────────────────────────────────────────────────────────
     {"island": "Marie-Galante", "name": "Capesterre",   "lat": 15.9217, "lon": -61.2033, "radius_km": 2.0},

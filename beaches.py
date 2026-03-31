@@ -35,7 +35,7 @@ from pathlib import Path
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 
-DB_PATH          = Path("./sargassum_data.db")
+DB_PATH          = Path(__file__).parent / "sargassum_data.db"
 DAY_OFFSETS      = [0, 1, 2, 3, 4, 5]
 REGIONAL_SIGMA   = 50.0   # km — bandwidth pour le score d'approche
 

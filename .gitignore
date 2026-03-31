@@ -21,3 +21,11 @@ captures/
 
 # Logs
 *.log
+
+# Pytest cache
+.pytest_cache/
+.coverage
+
+# Backups
+*.bak
+*.bak2

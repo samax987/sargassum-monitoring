@@ -1,166 +1,211 @@
-# Sargassum Monitoring — Saint-Barthélemy
+# Sargassum Monitoring — Surveillance des sargasses aux Antilles
 
-Système de surveillance automatisée des sargasses pour Saint-Barth.
-Collecte des données satellite et océanographiques, simulation de dérive OpenDrift,
-scoring de risque par plage, et dashboard Streamlit.
-
----
+Système automatisé de surveillance, prévision et alerte des échouages de sargasses sur les plages des Antilles françaises.
 
 ## Architecture
 
 ```
-sargassum_collector.py     Collecte 6 sources + simulation OpenDrift
-beaches.py                 Scoring de risque par plage (Gaussian density)
-sargassum_dashboard.py     Dashboard Streamlit (5 pages)
-sargassum_webcam_capture.py  Capture horaire des webcams
-sargassum_run.sh           Pipeline cron : collecte → simulation → scores
-com.sargassum.collector.plist  launchd job toutes les 6h
-com.sargassum.webcam.plist     launchd job toutes les 1h
+┌─────────────────────────────────────────────────────────────────────┐
+│                          VPS (45.55.239.73)                         │
+│                                                                     │
+│  Cron (0 */6 * * *)                                                 │
+│  └── sargassum_run_linux.sh                                         │
+│       ├── [1/4] sargassum_collector.py   ← 6 sources de données    │
+│       ├── [2/4] sargassum_collector.py --simulate  ← OpenDrift     │
+│       ├── [3/4] beaches.py              ← scoring par plage        │
+│       └── [4/4] sargassum_alert.py      ← alertes Telegram         │
+│                                                                     │
+│  Cron (0 14 * * *)                                                  │
+│  └── sargassum_webcam_capture.py        ← captures webcam          │
+│                                                                     │
+│  systemd: sargassum-dashboard.service                               │
+│  └── sargassum_dashboard.py             → http://45.55.239.73:8501 │
+│                                                                     │
+│  SQLite: sargassum_data.db (11 tables)                              │
+└─────────────────────────────────────────────────────────────────────┘
 ```
-
-Toutes les données sont stockées dans **`sargassum_data.db`** (SQLite).
-
----
 
 ## Sources de données
 
-| Source | Données | Fréquence |
-|---|---|---|
-| NOAA SIR | Rapport hebdomadaire PDF + KMZ | Hebdomadaire |
-| NOAA ERDDAP AFAI | Indice de sargasses 7-jours (pixels satellite) | Quotidien |
-| Copernicus Marine | Courants de surface Caraïbes (uo/vo, 0.25°) | Horaire |
-| AVISO+ DUACS | Courants géostrophiques SSH (ugos/vgos, 0.125°) | Quotidien |
-| FORESEA CNRS | Prévisions et posts WordPress | À la demande |
-| Sargassum Monitoring | Articles scientifiques (API WordPress) | À la demande |
-| OpenDrift | Simulation de dérive 5 jours (7 000+ particules) | À chaque run |
-| Webcams | 8 caméras Saint-Barth / Martinique / Saint-Martin | Horaire |
+| Source | Type | Fréquence | Table SQLite |
+|---|---|---|---|
+| NOAA ERDDAP AFAI_7D | Satellite AFAI (détection sargasse) | À chaque collecte | `noaa_afai` |
+| NOAA SIR | Rapport PDF hebdomadaire + KMZ | À chaque collecte | `noaa_sir_reports` |
+| FORESEA CNRS | Prévisions API WordPress | À chaque collecte | `foresea_forecasts` |
+| Sargassum Monitoring | Articles API WordPress | À chaque collecte | `sargassum_monitoring` |
+| Copernicus Marine | Courants totaux surface (CMEMS) | À chaque collecte | `copernicus_currents` |
+| AVISO+ DUACS | Courants géostrophiques SSH | À chaque collecte | `aviso_geostrophic` |
+| OpenDrift | Simulation dérive 5 jours | À chaque collecte | `drift_predictions` |
+| Webcams | 7 caméras (Saint-Barth + Martinique) | 14h UTC quotidien | `webcam_captures` |
 
----
+## Algorithme de scoring des plages
+
+Pour chaque plage et chaque jour (j+0 à j+5), on calcule :
+
+- **`local_score`** : somme gaussienne σ=`radius_km` → détecte les arrivées imminentes
+- **`regional_score`** : somme gaussienne σ=50 km → détecte les masses qui approchent
+- **`closest_km`** : distance à la particule de dérive la plus proche
+- **`density_km2`** : particules estimées par km² dans la zone de catchment
+
+```
+risk_level = none   si regional_score < 5
+           = low    si regional_score ∈ [5, 25)
+           = medium si regional_score ∈ [25, 75)
+           = high   si regional_score ≥ 75
+```
+
+Les scores sont extrapolés à la population totale de particules via `ratio = n_active / n_sample`.
+
+## Plages surveillées (46 plages, 5 îles)
+
+| Île | Plages |
+|---|---|
+| Saint-Barthélemy | 10 |
+| Saint-Martin | 8 |
+| Martinique | 13 |
+| Guadeloupe | 10 |
+| Marie-Galante | 5 |
 
 ## Installation
 
-```bash
-pip install streamlit plotly folium streamlit-folium \
-            requests beautifulsoup4 numpy schedule \
-            copernicusmarine opendrift psutil
-```
+### Prérequis
+
+- Python 3.12+
+- Compte Copernicus Marine (gratuit) : https://data.marine.copernicus.eu
+- Compte AVISO+ (optionnel) : https://www.aviso.altimetry.fr
+
+### Configuration
 
 Créer un fichier `.env` dans le répertoire du projet :
 
-```
-COPERNICUS_USERNAME=votre_login
+```env
+COPERNICUS_USERNAME=votre_email@example.com
 COPERNICUS_PASSWORD=votre_mot_de_passe
+AVISO_USERNAME=votre_email@example.com     # optionnel
+AVISO_PASSWORD=votre_mot_de_passe          # optionnel
+TELEGRAM_TOKEN=votre_bot_token             # obtenu via @BotFather
+TELEGRAM_CHAT=votre_chat_id               # ID du canal/groupe Telegram
 ```
 
-Inscription gratuite : https://data.marine.copernicus.eu
-
----
-
-## Utilisation
+### Dépendances
 
 ```bash
-# Collecte unique (6 sources)
+pip install -r requirements.txt
+```
+
+### Exécution manuelle
+
+```bash
+# Collecte complète (toutes sources)
 python sargassum_collector.py
 
-# Simulation de dérive OpenDrift
+# Simulation de dérive OpenDrift (5 jours)
 python sargassum_collector.py --simulate
 
-# Calcul des scores de risque par plage
+# Calcul des scores par plage
 python beaches.py
 
-# Rapport de risque (sans recalcul)
+# Afficher le dernier rapport
 python beaches.py --report
 
-# Capture webcams (run unique)
-python sargassum_webcam_capture.py --once
+# Envoyer une alerte Telegram (test)
+python sargassum_alert.py --test
 
-# Dashboard
-streamlit run sargassum_dashboard.py
+# Forcer l'envoi d'une alerte
+python sargassum_alert.py --force
+
+# Pipeline complet (équivalent au cron)
+bash sargassum_run_linux.sh
 ```
 
----
-
-## Dashboard
-
-5 pages accessibles via la sidebar :
-
-- **Carte** — carte Folium avec particules de dérive (j+0…j+5), courants Copernicus et AVISO
-- **Métriques** — KPI (couverture AFAI, vitesses courants) + graphiques Plotly
-- **Actualités** — rapports NOAA SIR, prévisions FORESEA, articles Sargassum Monitoring
-- **Plages** — carte Saint-Barth + heatmap de risque par plage × jour
-- **Webcams** — dernières captures par caméra, historique 24h
-
----
-
-## Scoring de risque des plages
-
-Le risque est calculé avec deux scores gaussiens extrapolés à la population entière
-(`n_active / n_sample`) :
-
-| Score | Formule | Usage |
-|---|---|---|
-| `local_score` | Σ exp(−d²/2r²) × ratio | Arrivées imminentes (σ = radius_km) |
-| `regional_score` | Σ exp(−d²/2×50²) × ratio | Masse qui approche (σ = 50 km) |
-
-Le `risk_level` est dérivé du `regional_score` :
-
-| Niveau | Seuil | Signification |
-|---|---|---|
-| 🟢 none | < 5 | Aucune masse à moins de ~120 km |
-| 🟡 low | ≥ 5 | 1 particule autour de 50–100 km |
-| 🟠 medium | ≥ 25 | Masse significative en approche |
-| 🔴 high | ≥ 75 | Masse importante à < 50 km |
-
-### Plages couvertes
-
-| Plage | Lat | Lon | Rayon |
-|---|---|---|---|
-| Flamands | 17.9067 | -62.8467 | 3 km |
-| Colombier | 17.9033 | -62.8600 | 2 km |
-| Saint-Jean | 17.9000 | -62.8267 | 4 km |
-| Lorient | 17.9000 | -62.8100 | 3 km |
-| Grand Cul-de-Sac | 17.9117 | -62.7917 | 3 km |
-| Petit Cul-de-Sac | 17.9067 | -62.7967 | 2 km |
-| Toiny | 17.8933 | -62.7817 | 2 km |
-| Gouverneur | 17.8717 | -62.8433 | 3 km |
-| Grande Saline | 17.8717 | -62.8267 | 3 km |
-| Marigot | 17.9033 | -62.8067 | 2 km |
-
----
-
-## Automatisation (macOS launchd)
+### Démarrer le dashboard
 
 ```bash
-# Installer les jobs
-launchctl load ~/Library/LaunchAgents/com.sargassum.collector.plist
-launchctl load ~/Library/LaunchAgents/com.sargassum.webcam.plist
-
-# Déclencher manuellement
-launchctl start com.sargassum.collector
-launchctl start com.sargassum.webcam
-
-# Logs
-tail -f /tmp/sargassum_collector.log
-tail -f /tmp/sargassum_webcam.log
+streamlit run sargassum_dashboard.py --server.port 8501 --server.address 0.0.0.0
 ```
 
-| Job | Script | Fréquence | Log |
-|---|---|---|---|
-| `com.sargassum.collector` | `sargassum_run.sh` | Toutes les 6h + au démarrage | `/tmp/sargassum_collector.log` |
-| `com.sargassum.webcam` | `sargassum_webcam_capture.py --once` | Toutes les 1h + au démarrage | `/tmp/sargassum_webcam.log` |
+## Structure du projet
 
----
+```
+/opt/sargassum/
+├── sargassum_collector.py    # Collecte multi-sources + simulation OpenDrift
+├── beaches.py                # Scoring par plage (algorithme gaussien)
+├── sargassum_alert.py        # Alertes Telegram anti-spam
+├── sargassum_dashboard.py    # Dashboard Streamlit (6 pages)
+├── sargassum_webcam_capture.py  # Capture webcams
+├── sargassum_run_linux.sh    # Pipeline cron (Linux/VPS)
+├── test_beaches.py           # Tests unitaires beaches.py (31 tests)
+├── test_alert.py             # Tests unitaires sargassum_alert.py (26 tests)
+├── requirements.txt          # Dépendances Python figées
+├── .env                      # Identifiants (non versionné)
+├── sargassum_data.db         # Base SQLite (non versionnée)
+└── captures/                 # Images webcam (non versionné)
+    ├── Martinique/
+    ├── Saint-Barth/
+    └── Saint-Martin/
+```
 
-## Structure de la base de données
+## Base de données SQLite
 
-| Table | Contenu |
+11 tables :
+
+| Table | Description | Rétention |
+|---|---|---|
+| `noaa_afai` | Données satellite AFAI 7 jours | 48 entrées max |
+| `noaa_sir_reports` | Rapports PDF SIR hebdomadaires | 48 entrées max |
+| `foresea_forecasts` | Prévisions FORESEA CNRS | 48 entrées max |
+| `sargassum_monitoring` | Articles Sargassum Monitoring | 48 entrées max |
+| `copernicus_currents` | Courants totaux Copernicus | 48 entrées max |
+| `aviso_geostrophic` | Courants géostrophiques AVISO+ | 48 entrées max |
+| `drift_predictions` | Snapshots de dérive OpenDrift (j+0 à j+5) | Toutes simulations |
+| `beach_risk_scores` | Scores de risque par plage × jour | 60 derniers `computed_at` |
+| `webcam_captures` | Captures webcam (chemin fichier) | 100 entrées |
+| `alert_state` | Historique alertes Telegram (anti-spam) | Indéfini |
+| `beach_observations` | Observations terrain (formulaire dashboard) | Indéfini |
+
+## Tests
+
+```bash
+# Tous les tests
+python -m pytest test_beaches.py test_alert.py -v
+
+# Avec couverture de code
+python -m pytest test_beaches.py test_alert.py --cov=beaches --cov=sargassum_alert --cov-report=term-missing
+
+# Tests spécifiques
+python -m pytest test_beaches.py::TestHaversine -v
+python -m pytest test_alert.py::TestBuildMessage -v
+```
+
+**Résultats actuels : 57/57 tests passent, couverture 61%**
+
+## Dashboard Streamlit (6 pages)
+
+| Page | Contenu |
 |---|---|
-| `noaa_sir_reports` | Rapports PDF hebdomadaires NOAA |
-| `noaa_afai` | Couverture sargasses AFAI 7-jours |
-| `copernicus_currents` | Courants de surface Copernicus |
-| `aviso_geostrophic` | Courants géostrophiques AVISO+ DUACS |
-| `foresea_forecasts` | Prévisions FORESEA CNRS |
-| `sargassum_monitoring` | Articles Sargassum Monitoring |
-| `drift_predictions` | Snapshots OpenDrift (j+0…j+5, ≤ 500 pts) |
-| `beach_risk_scores` | Scores gaussiens par plage × jour |
-| `webcam_captures` | Métadonnées captures webcam |
+| **Carte** | Carte Folium avec particules de dérive (j+0 à j+5), flèches courants |
+| **Métriques** | KPIs + graphiques temporels AFAI, vitesses courants |
+| **Actualités** | Rapports NOAA SIR, prévisions FORESEA, articles Sargassum Monitoring |
+| **Plages** | Carte risque par île, heatmap `regional_score`, tableau détaillé |
+| **Webcams** | Dernières captures + historique 24h |
+| **Observations** | Formulaire saisie terrain |
+
+## Alertes Telegram
+
+- Déclenchement : plage ≥ `medium` (regional_score ≥ 25)
+- Fenêtre d'envoi : 06h00 UTC ±1h (cron de 06h)
+- Anti-spam : hash MD5 du payload des plages en alerte — envoi uniquement si changement
+- Île prioritaire (Saint-Barth) : détail plage par plage
+- Autres îles : résumé compact (comptage par niveau)
+
+## Service systemd
+
+```bash
+systemctl status sargassum-dashboard.service
+systemctl restart sargassum-dashboard.service
+journalctl -u sargassum-dashboard.service -f
+```
+
+## Licence
+
+Usage privé / monitoring personnel.

@@ -57,7 +57,7 @@ except ImportError:
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 
-DB_PATH   = Path("./sargassum_data.db")
+DB_PATH   = Path(__file__).parent / "sargassum_data.db"
 CARIB     = dict(lat_min=8.0, lat_max=28.0, lon_min=-90.0, lon_max=-55.0)
 HEADERS   = {"User-Agent": "Mozilla/5.0 (compatible; SargassumCollector/1.0)"}
 TIMEOUT   = 45      # secondes par requête HTTP

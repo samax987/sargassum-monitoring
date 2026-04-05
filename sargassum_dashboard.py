@@ -372,7 +372,7 @@ with st.sidebar:
     st.divider()
     page = st.radio(
         "Navigation",
-        ["Carte", "Métriques", "Actualités", "Plages", "Webcams", "Observations"],
+        ["Carte", "Métriques", "Actualités", "Plages", "Webcams", "Observations", "Calibration"],
         label_visibility="collapsed",
     )
 
@@ -955,10 +955,12 @@ elif page == "Webcams":
                 except Exception:
                     st.warning("Impossible de charger l'historique.")
 
-# ── Page 6 : Observations terrain ─────────────────────────────────────────────
+# ── Page 6 : Observations terrain & Intelligence IA ──────────────────────────
 
 elif page == "Observations":
     import datetime as _dt
+    import sys as _sys
+    import importlib as _importlib
 
     # ── Schéma DB ─────────────────────────────────────────────────────────────
     def _ensure_obs_table(db_path: str):
@@ -975,12 +977,23 @@ elif page == "Observations":
                 source        TEXT DEFAULT 'terrain'
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS claude_intel_log (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_at      TEXT NOT NULL,
+                source_name TEXT,
+                source_url  TEXT,
+                obs_count   INTEGER DEFAULT 0,
+                status      TEXT,
+                error       TEXT
+            )
+        """)
         conn.commit()
         conn.close()
 
     _ensure_obs_table(db_path)
 
-    # ── Plages disponibles (depuis beaches.py) ─────────────────────────────────
+    # ── Plages disponibles ─────────────────────────────────────────────────────
     BEACHES_BY_ISLAND = {
         "Saint-Barth": [
             "Flamands", "Colombier", "Saint-Jean", "Lorient",
@@ -1031,97 +1044,330 @@ elif page == "Observations":
     </style>
     """, unsafe_allow_html=True)
 
-    st.header("📍 Observation terrain")
-    st.caption("Saisie rapide depuis la plage — les données calibrent les prédictions.")
+    st.header("📍 Observations & Intelligence IA")
+    st.caption("Saisie terrain, analyse d'URL ou de texte par Claude Haiku, collecte web automatique.")
 
+    tab_terrain, tab_url, tab_texte, tab_auto = st.tabs([
+        "📋 Terrain", "🔗 Analyser URL", "📝 Analyser texte", "🤖 Collecte IA"
+    ])
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # ONGLET 1 : Formulaire terrain
+    # ──────────────────────────────────────────────────────────────────────────
+    with tab_terrain:
+        st.subheader("Saisie depuis la plage")
+
+        with st.form("obs_form", clear_on_submit=True):
+            col1, col2 = st.columns(2)
+            with col1:
+                sel_island = st.selectbox("Île", list(BEACHES_BY_ISLAND.keys()), index=0)
+            with col2:
+                sel_beach = st.selectbox("Plage", BEACHES_BY_ISLAND[sel_island])
+
+            sel_risk_label = st.radio(
+                "Niveau observé",
+                list(RISK_OPTIONS.keys()),
+                horizontal=False,
+            )
+            sel_risk = RISK_OPTIONS[sel_risk_label]
+
+            col3, col4 = st.columns(2)
+            with col3:
+                sel_date = st.date_input("Date", value=_dt.date.today())
+            with col4:
+                sel_time = st.time_input("Heure (locale)", value=_dt.datetime.now().time())
+
+            sel_coverage = st.slider(
+                "Couverture estimée (%)",
+                min_value=0, max_value=100, value=0, step=5,
+            )
+            sel_notes = st.text_area(
+                "Notes (optionnel)",
+                placeholder="Ex: bande de 1m en haut de plage, odeur forte…",
+                height=80,
+            )
+            submitted = st.form_submit_button("✅ Enregistrer l'observation", type="primary")
+
+        if submitted:
+            observed_at = _dt.datetime.combine(sel_date, sel_time).strftime("%Y-%m-%dT%H:%M:%S")
+            conn_w = sqlite3.connect(db_path)
+            conn_w.execute(
+                """INSERT INTO beach_observations
+                   (observed_at, island, beach_name, observed_risk, coverage_pct, notes, source)
+                   VALUES (?, ?, ?, ?, ?, ?, 'terrain')""",
+                (observed_at, sel_island, sel_beach, sel_risk,
+                 sel_coverage if sel_coverage > 0 else None,
+                 sel_notes.strip() or None),
+            )
+            conn_w.commit()
+            conn_w.close()
+            st.success(f"Observation enregistrée — {sel_beach} ({sel_island}) : **{sel_risk_label}** le {observed_at[:16]}")
+            st.balloons()
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # ONGLET 2 : Analyser une URL avec Claude Haiku
+    # ──────────────────────────────────────────────────────────────────────────
+    with tab_url:
+        st.subheader("🔗 Analyser un article ou une page web")
+        st.caption("Colle l'URL d'un article, rapport ou post. Claude Haiku extrait les observations sargasses.")
+
+        url_input = st.text_input(
+            "URL à analyser",
+            placeholder="https://www.rci.fm/martinique/infos/…",
+            key="url_input"
+        )
+        col_u1, col_u2 = st.columns([1, 3])
+        with col_u1:
+            analyze_url_btn = st.button("🔍 Analyser", key="analyze_url_btn", type="primary")
+
+        if analyze_url_btn and url_input.strip():
+            with st.spinner("Claude Haiku analyse la page…"):
+                import sys, importlib
+                _intel_path = str(__import__('pathlib').Path(db_path).parent)
+                if _intel_path not in sys.path:
+                    sys.path.insert(0, _intel_path)
+                try:
+                    import sarga_claude_intel as _sci
+                    importlib.reload(_sci)
+                    obs_list = _sci.analyze_url(url_input.strip())
+                except Exception as _e:
+                    obs_list = []
+                    st.error(f"Erreur : {_e}")
+
+            if not obs_list:
+                st.warning("Aucune observation sargasses trouvée dans cette page.")
+            else:
+                st.success(f"{len(obs_list)} observation(s) trouvée(s) !")
+                RISK_ICONS = {"none": "🟢", "low": "🟡", "medium": "🟠", "high": "🔴"}
+
+                if "url_pending_obs" not in st.session_state:
+                    st.session_state["url_pending_obs"] = []
+                st.session_state["url_pending_obs"] = obs_list
+
+                for obs in obs_list:
+                    icon = RISK_ICONS.get(obs.get("risk_level", "low"), "⚪")
+                    st.markdown(
+                        f"**{icon} {obs.get('island', '?')} / {obs.get('beach_name', '?')}** "
+                        f"— {obs.get('event_date', '?')} "
+                        f"— confiance {obs.get('confidence', 0):.0%}"
+                    )
+                    if obs.get("description"):
+                        st.caption(obs["description"])
+
+                if st.button("💾 Enregistrer ces observations en DB", key="save_url_obs"):
+                    conn_w = sqlite3.connect(db_path)
+                    stored = _sci.store_observations(
+                        st.session_state.get("url_pending_obs", []),
+                        source_name=url_input[:60],
+                        source_url=url_input,
+                        conn=conn_w,
+                        dry_run=False,
+                    )
+                    conn_w.close()
+                    st.success(f"{stored} observation(s) enregistrée(s) !")
+                    st.session_state["url_pending_obs"] = []
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # ONGLET 3 : Analyser un texte brut
+    # ──────────────────────────────────────────────────────────────────────────
+    with tab_texte:
+        st.subheader("📝 Analyser un texte ou message")
+        st.caption("Colle n'importe quel texte : WhatsApp, email, rapport PDF, tweet… Claude Haiku structure les infos.")
+
+        text_input = st.text_area(
+            "Texte à analyser",
+            placeholder="Ex: 'Ce matin à Tartane il y a un échouage massif de sargasses, les algues font 50cm d'épaisseur sur toute la plage…'",
+            height=180,
+            key="text_input"
+        )
+        source_label = st.text_input(
+            "Source (optionnel)",
+            placeholder="Ex: WhatsApp groupe pêcheurs, Facebook Martinique, article RCI",
+            key="text_source_label"
+        )
+        analyze_text_btn = st.button("🔍 Analyser le texte", key="analyze_text_btn", type="primary")
+
+        if analyze_text_btn and text_input.strip():
+            with st.spinner("Claude Haiku analyse le texte…"):
+                import sys, importlib
+                _intel_path = str(__import__('pathlib').Path(db_path).parent)
+                if _intel_path not in sys.path:
+                    sys.path.insert(0, _intel_path)
+                try:
+                    import sarga_claude_intel as _sci2
+                    importlib.reload(_sci2)
+                    obs_list2 = _sci2.analyze_text(
+                        text_input.strip(),
+                        source_hint=source_label.strip() or "saisie dashboard"
+                    )
+                except Exception as _e2:
+                    obs_list2 = []
+                    st.error(f"Erreur : {_e2}")
+
+            RISK_ICONS = {"none": "🟢", "low": "🟡", "medium": "🟠", "high": "🔴"}
+
+            if not obs_list2:
+                st.warning("Aucune observation sargasses trouvée dans ce texte.")
+            else:
+                st.success(f"{len(obs_list2)} observation(s) extraite(s) !")
+                st.session_state["text_pending_obs"] = obs_list2
+
+                for obs in obs_list2:
+                    icon = RISK_ICONS.get(obs.get("risk_level", "low"), "⚪")
+                    st.markdown(
+                        f"**{icon} {obs.get('island', '?')} / {obs.get('beach_name', '?')}** "
+                        f"— {obs.get('event_date', '?')} "
+                        f"— confiance {obs.get('confidence', 0):.0%}"
+                    )
+                    if obs.get("description"):
+                        st.caption(obs["description"])
+
+                src_name = source_label.strip() or "texte manuel"
+                if st.button("💾 Enregistrer en DB", key="save_text_obs"):
+                    conn_w = sqlite3.connect(db_path)
+                    stored2 = _sci2.store_observations(
+                        st.session_state.get("text_pending_obs", []),
+                        source_name=src_name,
+                        source_url="",
+                        conn=conn_w,
+                        dry_run=False,
+                    )
+                    conn_w.close()
+                    st.success(f"{stored2} observation(s) enregistrée(s) !")
+                    st.session_state["text_pending_obs"] = []
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # ONGLET 4 : Collecte IA automatique
+    # ──────────────────────────────────────────────────────────────────────────
+    with tab_auto:
+        st.subheader("🤖 Intelligence IA — Collecte web automatique")
+        st.caption("Claude Haiku parcourt les médias caribéens et sources scientifiques pour détecter les échouages récents.")
+
+        # Infos sur la dernière collecte
+        conn_log = get_connection(db_path)
+        if conn_log:
+            try:
+                df_log = pd.read_sql_query(
+                    """SELECT run_at, source_name, obs_count, status
+                       FROM claude_intel_log
+                       ORDER BY run_at DESC
+                       LIMIT 20""",
+                    conn_log,
+                )
+                conn_log.close()
+            except Exception:
+                df_log = pd.DataFrame()
+        else:
+            df_log = pd.DataFrame()
+
+        if not df_log.empty:
+            last_run = df_log["run_at"].iloc[0][:16].replace("T", " ")
+            total_found = df_log.groupby("run_at")["obs_count"].sum()
+            st.info(f"Dernière collecte IA : **{last_run} UTC** | {int(total_found.iloc[0])} obs. trouvée(s)")
+        else:
+            st.info("Aucune collecte IA effectuée pour l'instant. Cron actif à 08h00 UTC chaque jour.")
+
+        col_a1, col_a2 = st.columns(2)
+        with col_a1:
+            launch_collect = st.button("▶️ Lancer la collecte maintenant", type="primary", key="launch_collect")
+        with col_a2:
+            st.caption("⏱ Durée estimée : 2-4 minutes (10 sources)")
+
+        if launch_collect:
+            import sys, importlib, subprocess
+            _intel_path = str(__import__('pathlib').Path(db_path).parent)
+            venv_python = str(__import__('pathlib').Path(db_path).parent / "venv" / "bin" / "python3")
+
+            progress_bar = st.progress(0, text="Initialisation…")
+            log_area = st.empty()
+
+            try:
+                proc = subprocess.Popen(
+                    [venv_python, str(__import__('pathlib').Path(db_path).parent / "sarga_claude_intel.py"), "--verbose"],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    cwd=str(__import__('pathlib').Path(db_path).parent),
+                )
+                output_lines = []
+                for i, line in enumerate(proc.stdout):
+                    output_lines.append(line.rstrip())
+                    log_area.code("\n".join(output_lines[-20:]), language="text")
+                    progress_bar.progress(min(i * 5, 95), text=line.strip()[:60])
+                proc.wait()
+                progress_bar.progress(100, text="Collecte terminée !")
+                st.success("Collecte IA terminée ! Rafraîchis la page pour voir les nouvelles observations.")
+            except Exception as _e_proc:
+                st.error(f"Erreur lors de la collecte : {_e_proc}")
+
+        st.divider()
+
+        # Historique des collectes IA
+        if not df_log.empty:
+            st.subheader("Historique des collectes")
+            df_log["date"] = df_log["run_at"].str[:16].str.replace("T", " ")
+            df_log["statut"] = df_log["status"].map({"ok": "✅", "fetch_error": "⚠️", "error": "❌"}).fillna("?") + " " + df_log["status"]
+            st.dataframe(
+                df_log[["date", "source_name", "obs_count", "statut"]],
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "date":        st.column_config.TextColumn("Date"),
+                    "source_name": st.column_config.TextColumn("Source"),
+                    "obs_count":   st.column_config.NumberColumn("Obs."),
+                    "statut":      st.column_config.TextColumn("Statut"),
+                },
+            )
+
+    # ── Historique global des observations ────────────────────────────────────
     st.divider()
+    st.subheader("Historique complet des observations")
 
-    # ── Formulaire ────────────────────────────────────────────────────────────
-    with st.form("obs_form", clear_on_submit=True):
-        col1, col2 = st.columns(2)
-        with col1:
-            sel_island = st.selectbox("Île", list(BEACHES_BY_ISLAND.keys()), index=0)
-        with col2:
-            sel_beach = st.selectbox("Plage", BEACHES_BY_ISLAND[sel_island])
-
-        sel_risk_label = st.radio(
-            "Niveau observé",
-            list(RISK_OPTIONS.keys()),
-            horizontal=False,
-        )
-        sel_risk = RISK_OPTIONS[sel_risk_label]
-
-        col3, col4 = st.columns(2)
-        with col3:
-            sel_date = st.date_input("Date", value=_dt.date.today())
-        with col4:
-            sel_time = st.time_input("Heure (locale)", value=_dt.datetime.now().time())
-
-        sel_coverage = st.slider(
-            "Couverture estimée (%)",
-            min_value=0, max_value=100, value=0, step=5,
-            help="% du linéaire de plage recouvert de sargasses",
-        )
-
-        sel_notes = st.text_area(
-            "Notes (optionnel)",
-            placeholder="Ex: bande de 1m en haut de plage, odeur forte, algues fraîches…",
-            height=80,
-        )
-
-        submitted = st.form_submit_button("✅ Enregistrer l'observation", type="primary")
-
-    if submitted:
-        observed_at = _dt.datetime.combine(sel_date, sel_time).strftime("%Y-%m-%dT%H:%M:%S")
-        conn_w = sqlite3.connect(db_path)
-        conn_w.execute(
-            """INSERT INTO beach_observations
-               (observed_at, island, beach_name, observed_risk, coverage_pct, notes, source)
-               VALUES (?, ?, ?, ?, ?, ?, 'terrain')""",
-            (observed_at, sel_island, sel_beach, sel_risk,
-             sel_coverage if sel_coverage > 0 else None,
-             sel_notes.strip() or None),
-        )
-        conn_w.commit()
-        conn_w.close()
-        st.success(f"Observation enregistrée — {sel_beach} ({sel_island}) : **{sel_risk_label}** le {observed_at[:16]}")
-        st.balloons()
-
-    # ── Historique ────────────────────────────────────────────────────────────
-    st.divider()
-    st.subheader("Historique des observations")
+    SOURCE_ICONS = {"terrain": "📍", "claude_web": "🤖", "manuel": "✍️"}
 
     conn_obs = get_connection(db_path)
     if conn_obs:
         try:
             df_obs = pd.read_sql_query(
                 """SELECT observed_at, island, beach_name, observed_risk,
-                          coverage_pct, notes
+                          coverage_pct, notes, source
                    FROM beach_observations
                    ORDER BY observed_at DESC
-                   LIMIT 100""",
+                   LIMIT 200""",
                 conn_obs,
             )
             conn_obs.close()
         except Exception:
             df_obs = pd.DataFrame()
 
-    RISK_ICONS = {"none": "🟢", "low": "🟡", "medium": "🟠", "high": "🔴"}
+    RISK_ICONS_H = {"none": "🟢", "low": "🟡", "medium": "🟠", "high": "🔴"}
 
     if df_obs.empty:
         st.info("Aucune observation enregistrée pour l'instant.")
     else:
-        df_obs["niveau"] = df_obs["observed_risk"].map(RISK_ICONS) + " " + df_obs["observed_risk"]
+        df_obs["niveau"] = df_obs["observed_risk"].map(RISK_ICONS_H) + " " + df_obs["observed_risk"]
         df_obs["date"] = df_obs["observed_at"].str[:16].str.replace("T", " ")
         df_obs["couverture"] = df_obs["coverage_pct"].apply(
             lambda x: f"{int(x)}%" if pd.notna(x) else "—"
         )
+        df_obs["src_icon"] = df_obs["source"].map(SOURCE_ICONS).fillna("🔵")
+
+        # Filtre par source
+        filter_src = st.multiselect(
+            "Filtrer par source",
+            options=df_obs["source"].unique().tolist(),
+            default=df_obs["source"].unique().tolist(),
+            key="filter_src",
+        )
+        df_show = df_obs[df_obs["source"].isin(filter_src)] if filter_src else df_obs
+
         st.dataframe(
-            df_obs[["date", "island", "beach_name", "niveau", "couverture", "notes"]],
+            df_show[["date", "src_icon", "island", "beach_name", "niveau", "couverture", "notes"]],
             use_container_width=True,
             hide_index=True,
             column_config={
                 "date":       st.column_config.TextColumn("Date"),
+                "src_icon":   st.column_config.TextColumn(""),
                 "island":     st.column_config.TextColumn("Île"),
                 "beach_name": st.column_config.TextColumn("Plage"),
                 "niveau":     st.column_config.TextColumn("Niveau"),
@@ -1129,4 +1375,179 @@ elif page == "Observations":
                 "notes":      st.column_config.TextColumn("Notes"),
             },
         )
-        st.caption(f"{len(df_obs)} observation(s) enregistrée(s)")
+        st.caption(f"{len(df_show)} observation(s) | 📍 terrain · 🤖 IA · ✍️ manuel")
+
+
+# ── Page 7 : Calibration prédit vs observé ────────────────────────────────────
+
+elif page == "Calibration":
+    import subprocess as _subprocess
+
+    st.header("📊 Calibration — Prédit vs Observé")
+    st.caption("Compare les prédictions OpenDrift avec les observations terrain. Identifie les biais par île et par mois.")
+
+    # ── Bouton recalculer ──────────────────────────────────────────────────────
+    col_c1, col_c2, col_c3 = st.columns([2, 1, 3])
+    with col_c1:
+        recalc = st.button("🔄 Recalculer la calibration", type="primary")
+    with col_c2:
+        st.caption("Durée : ~5 sec")
+
+    if recalc:
+        venv_py = str(__import__("pathlib").Path(db_path).parent / "venv" / "bin" / "python3")
+        script  = str(__import__("pathlib").Path(db_path).parent / "sarga_calibration.py")
+        with st.spinner("Calibration en cours…"):
+            result = _subprocess.run([venv_py, script, "--verbose"],
+                                     capture_output=True, text=True,
+                                     cwd=str(__import__("pathlib").Path(db_path).parent))
+        if result.returncode == 0:
+            st.success("Calibration terminée !")
+            st.code(result.stdout, language="text")
+        else:
+            st.error("Erreur lors de la calibration")
+            st.code(result.stderr, language="text")
+        st.rerun()
+
+    st.divider()
+
+    # ── Chargement données calibration ────────────────────────────────────────
+    conn_cal = get_connection(db_path)
+    df_bias   = pd.DataFrame()
+    df_matches = pd.DataFrame()
+
+    if conn_cal:
+        try:
+            df_bias = pd.read_sql_query(
+                """SELECT island, month_label, n_matches, n_correct, n_under, n_over,
+                          accuracy, mean_error, bias_direction, correction, recommendation
+                   FROM calibration_bias ORDER BY island, month""",
+                conn_cal,
+            )
+            df_matches = pd.read_sql_query(
+                """SELECT island, obs_beach, pred_beach, obs_date, observed_risk,
+                          predicted_risk, fuzzy_score, risk_error, error_direction
+                   FROM calibration_matches
+                   WHERE predicted_risk IS NOT NULL
+                   ORDER BY island, obs_date""",
+                conn_cal,
+            )
+            conn_cal.close()
+        except Exception as _e:
+            st.warning(f"Données de calibration non disponibles : {_e}")
+
+    if df_bias.empty:
+        st.info("Aucune calibration disponible. Clique sur **Recalculer** pour lancer l'analyse.")
+        st.stop()
+
+    # ── Résumé global ─────────────────────────────────────────────────────────
+    total_matches = int(df_bias["n_matches"].sum())
+    total_correct = int(df_bias["n_correct"].sum())
+    total_under   = int(df_bias["n_under"].sum())
+    total_over    = int(df_bias["n_over"].sum())
+    global_acc    = total_correct / total_matches if total_matches > 0 else 0
+
+    col_m1, col_m2, col_m3, col_m4 = st.columns(4)
+    col_m1.metric("Paires analysées", total_matches)
+    col_m2.metric("Précision globale", f"{global_acc:.0%}")
+    col_m3.metric("Sous-prédictions ↓", total_under, help="Réalité > Prédiction")
+    col_m4.metric("Sur-prédictions ↑", total_over, help="Prédiction > Réalité")
+
+    st.divider()
+
+    # ── Tableau biais par île/mois ─────────────────────────────────────────────
+    st.subheader("Biais par île et par mois")
+
+    DIR_ICONS = {"correct": "✅", "sous-prédit": "⬇️ sous-prédit", "sur-prédit": "⬆️ sur-prédit"}
+    df_bias["direction"] = df_bias["bias_direction"].map(DIR_ICONS).fillna(df_bias["bias_direction"])
+    df_bias["précision"] = (df_bias["accuracy"] * 100).round(0).astype(int).astype(str) + "%"
+    df_bias["biais"] = df_bias["mean_error"].apply(lambda x: f"{x:+.2f}")
+
+    st.dataframe(
+        df_bias[["island", "month_label", "n_matches", "précision", "biais", "direction"]],
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "island":      st.column_config.TextColumn("Île"),
+            "month_label": st.column_config.TextColumn("Mois"),
+            "n_matches":   st.column_config.NumberColumn("N obs."),
+            "précision":   st.column_config.TextColumn("Précision"),
+            "biais":       st.column_config.TextColumn("Biais moyen", help="+= sur-prédit, -= sous-prédit"),
+            "direction":   st.column_config.TextColumn("Direction"),
+        },
+    )
+
+    # ── Recommandations ───────────────────────────────────────────────────────
+    reco_df = df_bias[df_bias["correction"] != 0]
+    if not reco_df.empty:
+        st.subheader("Recommandations de correction")
+        for _, row in reco_df.iterrows():
+            icon = "🔼" if row["correction"] > 0 else "🔽"
+            st.markdown(f"**{icon} {row['recommendation']}**")
+    else:
+        st.success("✅ Toutes les prédictions sont bien calibrées pour les données disponibles.")
+
+    st.divider()
+
+    # ── Graphique biais par île ────────────────────────────────────────────────
+    if not df_bias.empty:
+        st.subheader("Visualisation des biais")
+
+        fig_bias = go.Figure()
+        for island in df_bias["island"].unique():
+            sub = df_bias[df_bias["island"] == island]
+            fig_bias.add_trace(go.Bar(
+                name=island,
+                x=sub["month_label"],
+                y=sub["mean_error"],
+                text=sub["précision"],
+                textposition="outside",
+            ))
+
+        fig_bias.update_layout(
+            barmode="group",
+            yaxis_title="Biais (+ = sur-prédit, - = sous-prédit)",
+            xaxis_title="Mois",
+            height=350,
+            margin=dict(t=20, b=20),
+            yaxis=dict(range=[-2, 2], zeroline=True, zerolinewidth=2),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02),
+        )
+        fig_bias.add_hline(y=0, line_dash="dash", line_color="white", opacity=0.5)
+        st.plotly_chart(fig_bias, use_container_width=True)
+
+    # ── Détail des matchs ─────────────────────────────────────────────────────
+    st.divider()
+    st.subheader("Détail des correspondances obs. ↔ prédictions")
+
+    if df_matches.empty:
+        st.info("Aucun match disponible.")
+    else:
+        RISK_ICONS = {"none": "🟢", "low": "🟡", "medium": "🟠", "high": "🔴"}
+        ERR_ICONS  = {"correct": "✅", "sous-prédit": "⬇️", "sur-prédit": "⬆️"}
+
+        df_matches["observé"]  = df_matches["observed_risk"].map(RISK_ICONS).fillna("?") + " " + df_matches["observed_risk"].fillna("")
+        df_matches["prédit"]   = df_matches["predicted_risk"].map(RISK_ICONS).fillna("?") + " " + df_matches["predicted_risk"].fillna("")
+        df_matches["résultat"] = df_matches["error_direction"].map(ERR_ICONS).fillna("?") + " " + df_matches["error_direction"].fillna("")
+        df_matches["confiance"]= df_matches["fuzzy_score"].apply(lambda x: f"{x:.0f}%" if x else "—")
+
+        # Filtre par île
+        islands_avail = ["Toutes"] + sorted(df_matches["island"].unique().tolist())
+        sel_island = st.selectbox("Filtrer par île", islands_avail, key="calib_island_filter")
+        df_show = df_matches if sel_island == "Toutes" else df_matches[df_matches["island"] == sel_island]
+
+        st.dataframe(
+            df_show[["island", "obs_date", "obs_beach", "pred_beach", "observé", "prédit", "résultat", "confiance"]],
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "island":    st.column_config.TextColumn("Île"),
+                "obs_date":  st.column_config.TextColumn("Date"),
+                "obs_beach": st.column_config.TextColumn("Plage observée"),
+                "pred_beach":st.column_config.TextColumn("Plage prédite"),
+                "observé":   st.column_config.TextColumn("Observé"),
+                "prédit":    st.column_config.TextColumn("Prédit"),
+                "résultat":  st.column_config.TextColumn("Résultat"),
+                "confiance": st.column_config.TextColumn("Match %"),
+            },
+        )
+        st.caption(f"{len(df_show)} correspondance(s) | Seuil fuzzy ≥ 55%")

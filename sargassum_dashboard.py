@@ -1383,26 +1383,30 @@ elif page == "Observations":
 elif page == "Calibration":
     import subprocess as _subprocess
 
-    st.header("📊 Calibration — Prédit vs Observé")
-    st.caption("Compare les prédictions OpenDrift avec les observations terrain. Identifie les biais par île et par mois.")
+    st.header("📊 Calibration spatiale — Erreur prédiction vs observation (km)")
+    st.caption("Compare les positions des particules OpenDrift aux observations terrain géocodées. "
+               "Mesure l'erreur en km par île × mois × day_offset, et identifie les biais directionnels (Δlon, Δlat).")
+
+    MOIS_LABELS = {1: "jan", 2: "fév", 3: "mars", 4: "avr", 5: "mai", 6: "juin",
+                   7: "juil", 8: "août", 9: "sept", 10: "oct", 11: "nov", 12: "déc"}
 
     # ── Bouton recalculer ──────────────────────────────────────────────────────
-    col_c1, col_c2, col_c3 = st.columns([2, 1, 3])
+    col_c1, col_c2, _ = st.columns([2, 1, 3])
     with col_c1:
-        recalc = st.button("🔄 Recalculer la calibration", type="primary")
+        recalc = st.button("🔄 Recalculer la calibration spatiale", type="primary")
     with col_c2:
         st.caption("Durée : ~5 sec")
 
     if recalc:
         venv_py = str(__import__("pathlib").Path(db_path).parent / "venv" / "bin" / "python3")
-        script  = str(__import__("pathlib").Path(db_path).parent / "sarga_calibration.py")
+        script  = str(__import__("pathlib").Path(db_path).parent / "sarga_calibration_spatial.py")
         with st.spinner("Calibration en cours…"):
-            result = _subprocess.run([venv_py, script, "--verbose"],
+            result = _subprocess.run([venv_py, script],
                                      capture_output=True, text=True,
                                      cwd=str(__import__("pathlib").Path(db_path).parent))
         if result.returncode == 0:
             st.success("Calibration terminée !")
-            st.code(result.stdout, language="text")
+            st.code(result.stdout[-2000:], language="text")
         else:
             st.error("Erreur lors de la calibration")
             st.code(result.stderr, language="text")
@@ -1410,144 +1414,185 @@ elif page == "Calibration":
 
     st.divider()
 
-    # ── Chargement données calibration ────────────────────────────────────────
+    # ── Chargement données ────────────────────────────────────────────────────
     conn_cal = get_connection(db_path)
-    df_bias   = pd.DataFrame()
-    df_matches = pd.DataFrame()
+    df_bias_all = pd.DataFrame()
+    df_matches  = pd.DataFrame()
 
     if conn_cal:
         try:
-            df_bias = pd.read_sql_query(
-                """SELECT island, month_label, n_matches, n_correct, n_under, n_over,
-                          accuracy, mean_error, bias_direction, correction, recommendation
-                   FROM calibration_bias ORDER BY island, month""",
+            df_bias_all = pd.read_sql_query(
+                """SELECT computed_at, island, month, day_offset, n_obs,
+                          mean_min_dist_km, median_min_dist_km,
+                          mean_delta_lat_km, mean_delta_lon_km, rmse_km, recommendation
+                   FROM calibration_spatial_bias
+                   ORDER BY computed_at DESC, island, month, day_offset""",
                 conn_cal,
             )
             df_matches = pd.read_sql_query(
-                """SELECT island, obs_beach, pred_beach, obs_date, observed_risk,
-                          predicted_risk, fuzzy_score, risk_error, error_direction
-                   FROM calibration_matches
-                   WHERE predicted_risk IS NOT NULL
-                   ORDER BY island, obs_date""",
+                """SELECT computed_at, island, obs_beach, obs_date, day_offset,
+                          min_dist_km, delta_lat_km, delta_lon_km,
+                          n_within_25km, n_within_50km
+                   FROM calibration_spatial
+                   ORDER BY obs_date DESC, island, day_offset""",
                 conn_cal,
             )
             conn_cal.close()
         except Exception as _e:
-            st.warning(f"Données de calibration non disponibles : {_e}")
+            st.warning(f"Données calibration spatiale non disponibles : {_e}. Clique sur Recalculer.")
 
-    if df_bias.empty:
-        st.info("Aucune calibration disponible. Clique sur **Recalculer** pour lancer l'analyse.")
+    if df_bias_all.empty:
+        st.info("Aucune calibration spatiale disponible. Clique sur **Recalculer**.")
         st.stop()
 
-    # ── Résumé global ─────────────────────────────────────────────────────────
-    total_matches = int(df_bias["n_matches"].sum())
-    total_correct = int(df_bias["n_correct"].sum())
-    total_under   = int(df_bias["n_under"].sum())
-    total_over    = int(df_bias["n_over"].sum())
-    global_acc    = total_correct / total_matches if total_matches > 0 else 0
+    # Snapshot le plus récent (pour les vues "courant")
+    latest_at = df_bias_all["computed_at"].max()
+    df_bias = df_bias_all[df_bias_all["computed_at"] == latest_at].copy()
+    df_bias["mois"] = df_bias["month"].map(MOIS_LABELS)
+
+    # ── Métriques globales ────────────────────────────────────────────────────
+    n_runs = df_bias_all["computed_at"].nunique()
+    n_matches_latest = len(df_matches[df_matches["computed_at"] == latest_at])
+    mean_dist = df_matches[df_matches["computed_at"] == latest_at]["min_dist_km"].mean()
+    pct_25 = (df_matches[df_matches["computed_at"] == latest_at]["min_dist_km"] <= 25).mean() * 100 if n_matches_latest else 0
+    pct_50 = (df_matches[df_matches["computed_at"] == latest_at]["min_dist_km"] <= 50).mean() * 100 if n_matches_latest else 0
 
     col_m1, col_m2, col_m3, col_m4 = st.columns(4)
-    col_m1.metric("Paires analysées", total_matches)
-    col_m2.metric("Précision globale", f"{global_acc:.0%}")
-    col_m3.metric("Sous-prédictions ↓", total_under, help="Réalité > Prédiction")
-    col_m4.metric("Sur-prédictions ↑", total_over, help="Prédiction > Réalité")
+    col_m1.metric("Matches (run courant)", n_matches_latest)
+    col_m2.metric("Distance moyenne", f"{mean_dist:.1f} km" if not pd.isna(mean_dist) else "—")
+    col_m3.metric("% à ≤ 25 km", f"{pct_25:.0f}%")
+    col_m4.metric("% à ≤ 50 km", f"{pct_50:.0f}%")
+    st.caption(f"Dernier run : {latest_at} | {n_runs} run(s) historisé(s)")
 
     st.divider()
 
-    # ── Tableau biais par île/mois ─────────────────────────────────────────────
-    st.subheader("Biais par île et par mois")
+    # ── Évolution temporelle de la distance moyenne ───────────────────────────
+    if n_runs >= 2:
+        st.subheader("📈 Évolution de la distance moyenne dans le temps")
+        st.caption("L'objectif : voir l'erreur diminuer après l'ajout du vent (mai 2026) et des prochains leviers.")
 
-    DIR_ICONS = {"correct": "✅", "sous-prédit": "⬇️ sous-prédit", "sur-prédit": "⬆️ sur-prédit"}
-    df_bias["direction"] = df_bias["bias_direction"].map(DIR_ICONS).fillna(df_bias["bias_direction"])
-    df_bias["précision"] = (df_bias["accuracy"] * 100).round(0).astype(int).astype(str) + "%"
-    df_bias["biais"] = df_bias["mean_error"].apply(lambda x: f"{x:+.2f}")
+        df_evol = (df_bias_all
+                   .groupby(["computed_at", "day_offset"])
+                   .apply(lambda g: (g["mean_min_dist_km"] * g["n_obs"]).sum() / g["n_obs"].sum()
+                          if g["n_obs"].sum() > 0 else None)
+                   .reset_index(name="dist_km"))
+        fig_evol = go.Figure()
+        for d in sorted(df_evol["day_offset"].unique()):
+            sub = df_evol[df_evol["day_offset"] == d].sort_values("computed_at")
+            fig_evol.add_trace(go.Scatter(
+                x=sub["computed_at"], y=sub["dist_km"],
+                mode="lines+markers", name=f"j+{d}",
+            ))
+        fig_evol.update_layout(
+            yaxis_title="Distance moyenne pondérée (km)",
+            xaxis_title="Date du calcul",
+            height=320, margin=dict(t=20, b=20),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02),
+        )
+        st.plotly_chart(fig_evol, use_container_width=True)
+    else:
+        st.info("ℹ️ Évolution disponible après ≥ 2 runs de calibration. "
+                "Le cron du lundi 9h UTC produira des points historiques.")
+
+    st.divider()
+
+    # ── Tableau biais courants ────────────────────────────────────────────────
+    st.subheader("Biais par île × mois × day_offset (snapshot le plus récent)")
+
+    df_show = df_bias[["island", "mois", "day_offset", "n_obs",
+                       "median_min_dist_km", "mean_delta_lon_km", "mean_delta_lat_km",
+                       "recommendation"]].copy()
+    df_show["dist_med"] = df_show["median_min_dist_km"].apply(lambda x: f"{x:.1f} km" if pd.notna(x) else "—")
+    df_show["Δlon"] = df_show["mean_delta_lon_km"].apply(lambda x: f"{x:+.1f} km" if pd.notna(x) else "—")
+    df_show["Δlat"] = df_show["mean_delta_lat_km"].apply(lambda x: f"{x:+.1f} km" if pd.notna(x) else "—")
+
+    islands_avail = ["Toutes"] + sorted(df_show["island"].unique().tolist())
+    sel_island = st.selectbox("Filtrer par île", islands_avail, key="calib_spatial_island")
+    df_filt = df_show if sel_island == "Toutes" else df_show[df_show["island"] == sel_island]
 
     st.dataframe(
-        df_bias[["island", "month_label", "n_matches", "précision", "biais", "direction"]],
+        df_filt[["island", "mois", "day_offset", "n_obs", "dist_med", "Δlon", "Δlat", "recommendation"]],
         use_container_width=True,
         hide_index=True,
         column_config={
-            "island":      st.column_config.TextColumn("Île"),
-            "month_label": st.column_config.TextColumn("Mois"),
-            "n_matches":   st.column_config.NumberColumn("N obs."),
-            "précision":   st.column_config.TextColumn("Précision"),
-            "biais":       st.column_config.TextColumn("Biais moyen", help="+= sur-prédit, -= sous-prédit"),
-            "direction":   st.column_config.TextColumn("Direction"),
+            "island":         st.column_config.TextColumn("Île"),
+            "mois":           st.column_config.TextColumn("Mois"),
+            "day_offset":     st.column_config.NumberColumn("j+"),
+            "n_obs":          st.column_config.NumberColumn("N obs.", help="Nombre d'observations agrégées"),
+            "dist_med":       st.column_config.TextColumn("Dist. médiane"),
+            "Δlon":           st.column_config.TextColumn("Δlon", help="+ = sim trop à l'est | - = sim trop à l'ouest"),
+            "Δlat":           st.column_config.TextColumn("Δlat", help="+ = sim trop au nord | - = sim trop au sud"),
+            "recommendation": st.column_config.TextColumn("Recommandation"),
         },
     )
-
-    # ── Recommandations ───────────────────────────────────────────────────────
-    reco_df = df_bias[df_bias["correction"] != 0]
-    if not reco_df.empty:
-        st.subheader("Recommandations de correction")
-        for _, row in reco_df.iterrows():
-            icon = "🔼" if row["correction"] > 0 else "🔽"
-            st.markdown(f"**{icon} {row['recommendation']}**")
-    else:
-        st.success("✅ Toutes les prédictions sont bien calibrées pour les données disponibles.")
+    st.caption(f"{len(df_filt)} cellule(s) | Correction appliquée dans beaches.py si n_obs ≥ 3 et |Δ| ≤ 60 km")
 
     st.divider()
 
-    # ── Graphique biais par île ────────────────────────────────────────────────
-    if not df_bias.empty:
-        st.subheader("Visualisation des biais")
+    # ── Heatmap des biais Δlon ────────────────────────────────────────────────
+    st.subheader("🌡️ Heatmap des biais — Δlon par île × day_offset (mois courant)")
+    st.caption("Lit en un coup d'œil les régimes directionnels saisonniers. "
+               "Rouge = sim trop à l'est (alizés sous-estimés). Bleu = sim trop à l'ouest.")
 
-        fig_bias = go.Figure()
-        for island in df_bias["island"].unique():
-            sub = df_bias[df_bias["island"] == island]
-            fig_bias.add_trace(go.Bar(
-                name=island,
-                x=sub["month_label"],
-                y=sub["mean_error"],
-                text=sub["précision"],
-                textposition="outside",
-            ))
-
-        fig_bias.update_layout(
-            barmode="group",
-            yaxis_title="Biais (+ = sur-prédit, - = sous-prédit)",
-            xaxis_title="Mois",
-            height=350,
-            margin=dict(t=20, b=20),
-            yaxis=dict(range=[-2, 2], zeroline=True, zerolinewidth=2),
-            legend=dict(orientation="h", yanchor="bottom", y=1.02),
+    months_avail = sorted(df_bias["month"].unique())
+    if months_avail:
+        sel_month = st.selectbox(
+            "Mois", months_avail,
+            index=len(months_avail) - 1,
+            format_func=lambda m: MOIS_LABELS.get(m, str(m)),
+            key="calib_spatial_month",
         )
-        fig_bias.add_hline(y=0, line_dash="dash", line_color="white", opacity=0.5)
-        st.plotly_chart(fig_bias, use_container_width=True)
+        df_heat = df_bias[df_bias["month"] == sel_month]
+        if not df_heat.empty:
+            pivot = df_heat.pivot_table(
+                index="island", columns="day_offset",
+                values="mean_delta_lon_km", aggfunc="mean",
+            )
+            fig_heat = go.Figure(data=go.Heatmap(
+                z=pivot.values,
+                x=[f"j+{d}" for d in pivot.columns],
+                y=pivot.index,
+                colorscale="RdBu_r",
+                zmid=0,
+                colorbar=dict(title="Δlon (km)"),
+                text=pivot.round(1).values,
+                texttemplate="%{text}",
+            ))
+            fig_heat.update_layout(height=300, margin=dict(t=20, b=20))
+            st.plotly_chart(fig_heat, use_container_width=True)
 
-    # ── Détail des matchs ─────────────────────────────────────────────────────
     st.divider()
-    st.subheader("Détail des correspondances obs. ↔ prédictions")
 
-    if df_matches.empty:
-        st.info("Aucun match disponible.")
+    # ── Détail des matches récents ────────────────────────────────────────────
+    st.subheader("Détail des matches obs. ↔ simulations")
+
+    df_matches_latest = df_matches[df_matches["computed_at"] == latest_at].copy()
+    if df_matches_latest.empty:
+        st.info("Aucun match dans le run courant.")
     else:
-        RISK_ICONS = {"none": "🟢", "low": "🟡", "medium": "🟠", "high": "🔴"}
-        ERR_ICONS  = {"correct": "✅", "sous-prédit": "⬇️", "sur-prédit": "⬆️"}
+        df_matches_latest["dist"] = df_matches_latest["min_dist_km"].apply(lambda x: f"{x:.1f} km" if pd.notna(x) else "—")
+        df_matches_latest["Δlon"] = df_matches_latest["delta_lon_km"].apply(lambda x: f"{x:+.1f}" if pd.notna(x) else "—")
+        df_matches_latest["Δlat"] = df_matches_latest["delta_lat_km"].apply(lambda x: f"{x:+.1f}" if pd.notna(x) else "—")
 
-        df_matches["observé"]  = df_matches["observed_risk"].map(RISK_ICONS).fillna("?") + " " + df_matches["observed_risk"].fillna("")
-        df_matches["prédit"]   = df_matches["predicted_risk"].map(RISK_ICONS).fillna("?") + " " + df_matches["predicted_risk"].fillna("")
-        df_matches["résultat"] = df_matches["error_direction"].map(ERR_ICONS).fillna("?") + " " + df_matches["error_direction"].fillna("")
-        df_matches["confiance"]= df_matches["fuzzy_score"].apply(lambda x: f"{x:.0f}%" if x else "—")
-
-        # Filtre par île
-        islands_avail = ["Toutes"] + sorted(df_matches["island"].unique().tolist())
-        sel_island = st.selectbox("Filtrer par île", islands_avail, key="calib_island_filter")
-        df_show = df_matches if sel_island == "Toutes" else df_matches[df_matches["island"] == sel_island]
+        islands_m = ["Toutes"] + sorted(df_matches_latest["island"].unique().tolist())
+        sel_isl_m = st.selectbox("Filtrer par île", islands_m, key="calib_spatial_island_match")
+        df_m = df_matches_latest if sel_isl_m == "Toutes" else df_matches_latest[df_matches_latest["island"] == sel_isl_m]
 
         st.dataframe(
-            df_show[["island", "obs_date", "obs_beach", "pred_beach", "observé", "prédit", "résultat", "confiance"]],
+            df_m[["obs_date", "island", "obs_beach", "day_offset", "dist", "Δlon", "Δlat",
+                  "n_within_25km", "n_within_50km"]],
             use_container_width=True,
             hide_index=True,
             column_config={
-                "island":    st.column_config.TextColumn("Île"),
-                "obs_date":  st.column_config.TextColumn("Date"),
-                "obs_beach": st.column_config.TextColumn("Plage observée"),
-                "pred_beach":st.column_config.TextColumn("Plage prédite"),
-                "observé":   st.column_config.TextColumn("Observé"),
-                "prédit":    st.column_config.TextColumn("Prédit"),
-                "résultat":  st.column_config.TextColumn("Résultat"),
-                "confiance": st.column_config.TextColumn("Match %"),
+                "obs_date":      st.column_config.TextColumn("Date obs."),
+                "island":        st.column_config.TextColumn("Île"),
+                "obs_beach":     st.column_config.TextColumn("Plage observée"),
+                "day_offset":    st.column_config.NumberColumn("j+"),
+                "dist":          st.column_config.TextColumn("Dist. min", help="Distance à la particule la plus proche"),
+                "Δlon":          st.column_config.TextColumn("Δlon (km)"),
+                "Δlat":          st.column_config.TextColumn("Δlat (km)"),
+                "n_within_25km": st.column_config.NumberColumn("≤25 km"),
+                "n_within_50km": st.column_config.NumberColumn("≤50 km"),
             },
         )
-        st.caption(f"{len(df_show)} correspondance(s) | Seuil fuzzy ≥ 55%")
+        st.caption(f"{len(df_m)} match(es) | Δ = sim - obs en km")

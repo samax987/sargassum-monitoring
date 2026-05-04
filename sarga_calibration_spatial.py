@@ -53,11 +53,21 @@ OBS_GEOCODE = {
 
     # Saint-Barth
     ("Saint-Barth", "flamands"):              (17.9067, -62.8467),
+    ("Saint-Barth", "petite anse"):           (17.9100, -62.8533),  # côté Flamands
+    ("Saint-Barth", "colombier"):             (17.9033, -62.8600),
+    ("Saint-Barth", "anse des cayes"):        (17.9117, -62.8517),
     ("Saint-Barth", "saint jean"):            (17.9000, -62.8267),
     ("Saint-Barth", "lorient"):               (17.9000, -62.8100),
-    ("Saint-Barth", "salines"):               (17.8717, -62.8267),
-    ("Saint-Barth", "gouverneur"):            (17.8717, -62.8433),
+    ("Saint-Barth", "marigot"):               (17.9033, -62.8067),
+    ("Saint-Barth", "grand cul de sac"):      (17.9117, -62.7917),
+    ("Saint-Barth", "petit cul de sac"):      (17.9067, -62.7967),
     ("Saint-Barth", "cul de sac"):            (17.9117, -62.7917),
+    ("Saint-Barth", "toiny"):                 (17.8933, -62.7817),
+    ("Saint-Barth", "salines"):               (17.8717, -62.8267),
+    ("Saint-Barth", "saline"):                (17.8717, -62.8267),
+    ("Saint-Barth", "gouverneur"):            (17.8717, -62.8433),
+    ("Saint-Barth", "shell beach"):           (17.8967, -62.8517),  # Gustavia
+    ("Saint-Barth", "gustavia"):              (17.8967, -62.8517),
 
     # Guadeloupe
     ("Guadeloupe", "porte d'enfer"):          (16.5167, -61.4667),

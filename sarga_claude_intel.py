@@ -77,6 +77,9 @@ WEB_SOURCES = [
     {"name": "La1ere Guadeloupe",   "url": "https://la1ere.francetvinfo.fr/guadeloupe/"},
     {"name": "Carib Journal",       "url": "https://caribjournal.com/?s=sargassum"},
     {"name": "The Sargassum Monitor","url": "https://www.thesargassummonitor.com/"},
+    # ── Sources Saint-Barth / Saint-Martin (manquaient) ───────────────────────
+    {"name": "St Barth Weekly",     "url": "https://www.stbarthweekly.com/"},
+    {"name": "Daily Herald SXM",    "url": "https://www.thedailyherald.sx/islands"},
     # ── Sources scientifiques ──────────────────────────────────────────────────
     {"name": "NOAA NESDIS Sargassum","url": "https://coastwatch.noaa.gov/cw_html/sargassum.html"},
     {"name": "USF Sargassum Watch", "url": "https://optics.marine.usf.edu/projects/saws.html"},

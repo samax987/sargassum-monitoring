@@ -29,3 +29,8 @@ captures/
 # Backups
 *.bak
 *.bak2
+*.before_wind
+cron.log.*
+venv/
+.claude/
+.claudeignore

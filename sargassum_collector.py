@@ -673,6 +673,110 @@ def collect_aviso_duacs(conn: sqlite3.Connection) -> bool:
 
 # ── Source 7 : OpenDrift – simulation de dérive 5 jours ──────────────────────
 
+def _fetch_gfs_wind_caribbean(out_path: Path, forecast_hours: int = 120) -> str | None:
+    """
+    Télécharge le vent 10m GFS 0.25° depuis NOMADS pour la zone Caraïbes,
+    concatène les pas (toutes les 3h) et écrit un NetCDF compatible OpenDrift
+    avec les variables CF `x_wind` (= u10) et `y_wind` (= v10).
+
+    Retourne la timestamp du run GFS utilisé (ISO) ou None si échec total.
+
+    Source : NOMADS filter_gfs_0p25.pl — public, pas d'auth requise.
+    Convention : windage ~1-2 % appliqué côté OpenDrift via drift:wind_drift_factor.
+    """
+    import cfgrib
+    import xarray as xr
+
+    # 1) Choisir le dernier run GFS dispo (~3h30 de latence après l'heure ronde)
+    now = datetime.now(timezone.utc)
+    available = now - timedelta(hours=3, minutes=30)
+    run_hour = (available.hour // 6) * 6
+    run_dt = available.replace(hour=run_hour, minute=0, second=0, microsecond=0)
+    if run_dt > available:
+        run_dt -= timedelta(hours=6)
+
+    date_str = run_dt.strftime("%Y%m%d")
+    hh       = run_dt.strftime("%H")
+
+    # 2) Pas de prévision : toutes les 3h sur 5 jours = 41 fichiers
+    fh_steps = list(range(0, forecast_hours + 1, 3))
+
+    tmpdir = out_path.parent / "gfs_tmp"
+    tmpdir.mkdir(exist_ok=True)
+
+    datasets = []
+    n_ok = 0
+    for fh in fh_steps:
+        fh_str = str(fh).zfill(3)
+        url = (
+            f"https://nomads.ncep.noaa.gov/cgi-bin/filter_gfs_0p25.pl"
+            f"?file=gfs.t{hh}z.pgrb2.0p25.f{fh_str}"
+            f"&var_UGRD=on&var_VGRD=on&lev_10_m_above_ground=on"
+            f"&leftlon={CARIB['lon_min'] - 3}&rightlon={CARIB['lon_max'] + 3}"
+            f"&toplat={CARIB['lat_max'] + 3}&bottomlat={CARIB['lat_min'] - 3}"
+            f"&dir=%2Fgfs.{date_str}%2F{hh}%2Fatmos"
+        )
+        grib_path = tmpdir / f"gfs_{date_str}_{hh}z_f{fh_str}.grib2"
+        try:
+            r = requests.get(url, timeout=120, stream=True)
+            r.raise_for_status()
+            with open(grib_path, "wb") as f:
+                for chunk in r.iter_content(chunk_size=65536):
+                    f.write(chunk)
+            ds = xr.open_dataset(grib_path, engine="cfgrib",
+                                 backend_kwargs={"indexpath": ""})
+            # GFS UGRD/VGRD à 10 m → noms cfgrib : u10, v10
+            ds = ds[["u10", "v10"]].rename({"u10": "x_wind", "v10": "y_wind"})
+            # NOMADS retourne longitudes 0-360, OpenDrift veut -180..180
+            if float(ds["longitude"].max()) > 180.0:
+                ds = ds.assign_coords(
+                    longitude=(((ds["longitude"] + 180) % 360) - 180)
+                ).sortby("longitude")
+            # Subset Caraïbes (NOMADS ne respecte pas toujours le filtre URL).
+            # GFS donne latitudes décroissantes (90 → -90) ; on slice puis on
+            # remet en ordre croissant pour respecter la convention CF attendue
+            # par OpenDrift (sinon le vent est interprété verticalement inversé).
+            ds = ds.sel(
+                latitude=slice(CARIB["lat_max"] + 3, CARIB["lat_min"] - 3),
+                longitude=slice(CARIB["lon_min"] - 3, CARIB["lon_max"] + 3),
+            ).sortby("latitude")
+            # Garantir une dimension `time` (les fichiers single-step n'en ont pas)
+            valid_time = run_dt + timedelta(hours=fh)
+            if "time" not in ds.dims:
+                ds = ds.expand_dims(time=[np.datetime64(valid_time.replace(tzinfo=None))])
+            datasets.append(ds)
+            n_ok += 1
+        except Exception as e:
+            print(f"    [warn] vent f{fh_str} indisponible : {e}")
+        finally:
+            if grib_path.exists():
+                grib_path.unlink()
+
+    # Cleanup des index cfgrib éventuels
+    for f in tmpdir.glob("*.idx"):
+        f.unlink()
+    try:
+        tmpdir.rmdir()
+    except OSError:
+        pass
+
+    if n_ok < 4:
+        print(f"    [warn] seulement {n_ok} pas vent récupérés — abandon vent")
+        return None
+
+    combined = xr.concat(datasets, dim="time").sortby("time")
+    # Attributs CF minimum pour qu'OpenDrift reconnaisse
+    combined["x_wind"].attrs.update({"units": "m s-1", "standard_name": "x_wind"})
+    combined["y_wind"].attrs.update({"units": "m s-1", "standard_name": "y_wind"})
+    combined.to_netcdf(out_path)
+    combined.close()
+    for ds in datasets:
+        ds.close()
+
+    print(f"    → vent GFS : run {date_str}_{hh}z, {n_ok}/{len(fh_steps)} pas, → {out_path.name}")
+    return run_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def _fetch_afai_positions(stride: int = 3, threshold: float = 0.0001):
     """
     Interroge ERDDAP pour obtenir les lat/lon réels des pixels avec
@@ -788,13 +892,30 @@ def simulate_drift(conn: sqlite3.Connection) -> bool:
         ds_anfc.to_netcdf(anfc_nc)
         ds_anfc.close()
 
+        # ── 2bis. Téléchargement du vent GFS 10 m (NOMADS) ───────────────────
+        wind_nc = tmpdir / "gfs_wind.nc"
+        wind_run = _fetch_gfs_wind_caribbean(wind_nc, forecast_hours=120)
+
         # ── 3. Simulation OpenDrift ───────────────────────────────────────────
         print("    → Initialisation OpenDrift…")
         reader_anfc = NCReader(str(anfc_nc))
+        readers = [reader_anfc]
+        if wind_run and wind_nc.exists():
+            try:
+                reader_wind = NCReader(str(wind_nc))
+                readers.append(reader_wind)
+                print(f"    → vent activé (run {wind_run})")
+            except Exception as e:
+                print(f"    [warn] reader vent KO : {e}")
+                wind_run = None
 
         od = OceanDrift(loglevel=50)      # silent
-        od.add_reader([reader_anfc])
+        od.add_reader(readers)
         od.set_config("general:use_auto_landmask", True)
+        # Windage : sargasses dérivent à ~1 % de la vitesse du vent (Putman et al. 2018)
+        # Appliqué au seeding ; calibré ensuite via sarga_calibration.py.
+        if wind_run:
+            od.set_config("seed:wind_drift_factor", 0.01)
 
         sim_start_naive = datetime.now(timezone.utc).replace(tzinfo=None)
         od.seed_elements(lon=lons_seed, lat=lats_seed, time=sim_start_naive)
@@ -844,14 +965,22 @@ def simulate_drift(conn: sqlite3.Connection) -> bool:
                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     simulated_at, sim_start_str, sim_end_str,
-                    n_particles, "DUACS+Copernicus", day,
+                    n_particles,
+                    "DUACS+Copernicus+GFS_wind1pct" if wind_run else "DUACS+Copernicus",
+                    day,
                     round(float(np.nanmin(lo_act)), 3) if n_act else None,
                     round(float(np.nanmax(lo_act)), 3) if n_act else None,
                     round(float(np.nanmin(la_act)), 3) if n_act else None,
                     round(float(np.nanmax(la_act)), 3) if n_act else None,
                     round(act_frac, 4),
                     json.dumps(positions),
-                    json.dumps({"day": day, "n_active": n_act, "afai_date": afai_date}),
+                    json.dumps({
+                        "day": day,
+                        "n_active": n_act,
+                        "afai_date": afai_date,
+                        "wind_run": wind_run,
+                        "wind_drift_factor": 0.01 if wind_run else 0.0,
+                    }),
                 ),
             )
             conn.commit()

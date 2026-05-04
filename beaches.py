@@ -82,6 +82,11 @@ BEACHES = [
     {"island": "Martinique", "name": "Le_Marin",           "lat": 14.4700, "lon": -60.8733, "radius_km": 2.0},
     {"island": "Martinique", "name": "Cap_Chevalier",      "lat": 14.4900, "lon": -60.8567, "radius_km": 2.0},
     {"island": "Martinique", "name": "Anse_Cafard",        "lat": 14.4433, "lon": -61.0533, "radius_km": 2.0},
+    # Côte atlantique — zones les plus fréquentes en observations sargasses
+    {"island": "Martinique", "name": "Le_Francois",        "lat": 14.6170, "lon": -60.9010, "radius_km": 3.5},
+    {"island": "Martinique", "name": "Le_Robert",          "lat": 14.6817, "lon": -60.9433, "radius_km": 3.0},
+    {"island": "Martinique", "name": "Tombolo_Ste-Marie",  "lat": 14.7780, "lon": -61.0000, "radius_km": 2.0},
+    {"island": "Martinique", "name": "Anse_Michel",        "lat": 14.4600, "lon": -60.8800, "radius_km": 2.0},
 
     # ── Guadeloupe ────────────────────────────────────────────────────────────
     {"island": "Guadeloupe", "name": "Grande_Anse_Deshaies",  "lat": 16.3050, "lon": -61.7950, "radius_km": 2.5},
@@ -95,6 +100,13 @@ BEACHES = [
     {"island": "Guadeloupe", "name": "Anse_Bourg_Deshaies",   "lat": 16.3017, "lon": -61.7967, "radius_km": 1.5},
     {"island": "Guadeloupe", "name": "Plage_de_Viard",        "lat": 16.1083, "lon": -61.5933, "radius_km": 2.0},
     {"island": "Guadeloupe", "name": "Le_Moule",              "lat": 16.3300, "lon": -61.3533, "radius_km": 3.0},
+    # Côte atlantique / nord — zones les plus fréquentes en observations sargasses
+    {"island": "Guadeloupe", "name": "Porte_d_Enfer",         "lat": 16.5167, "lon": -61.4667, "radius_km": 2.5},
+    {"island": "Guadeloupe", "name": "Souffleur_Desirade",    "lat": 16.3333, "lon": -61.0833, "radius_km": 2.5},
+    {"island": "Guadeloupe", "name": "Anse_des_Rochers",      "lat": 16.2350, "lon": -61.2750, "radius_km": 2.0},
+    {"island": "Guadeloupe", "name": "Raisins_Clairs",        "lat": 16.2533, "lon": -61.2750, "radius_km": 2.0},
+    {"island": "Guadeloupe", "name": "Sainte-Anne_Galbas",    "lat": 16.2250, "lon": -61.4050, "radius_km": 2.5},
+    {"island": "Guadeloupe", "name": "Bois_Jolan",            "lat": 16.2300, "lon": -61.3700, "radius_km": 2.0},
 
     # ── Marie-Galante ─────────────────────────────────────────────────────────
     {"island": "Marie-Galante", "name": "Capesterre",   "lat": 15.9217, "lon": -61.2033, "radius_km": 2.0},

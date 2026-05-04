@@ -30,7 +30,7 @@ import json
 import math
 import sqlite3
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 # ── Configuration ─────────────────────────────────────────────────────────────
@@ -41,6 +41,12 @@ REGIONAL_SIGMA   = 50.0   # km — bandwidth pour le score d'approche
 
 # Seuils sur regional_score (population extrapolée, σ = 50 km)
 RISK_THRESHOLDS = {"low": 5.0, "medium": 25.0, "high": 75.0}
+
+# Correction des biais issus de calibration_spatial_bias
+# Appliquée seulement si n_obs >= MIN_BIAS_NOBS (sinon biais trop bruité)
+APPLY_BIAS_CORRECTION = True
+MIN_BIAS_NOBS         = 3
+MAX_BIAS_KM           = 60.0  # garde-fou : ignore biais > 60 km (vraisemblablement aberrants)
 
 
 # ── Plages — Antilles françaises ───────────────────────────────────────────────
@@ -128,6 +134,63 @@ def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     a = (math.sin(dphi / 2) ** 2
          + math.cos(phi1) * math.cos(phi2) * math.sin(dlam / 2) ** 2)
     return R * 2 * math.asin(math.sqrt(a))
+
+
+def _deg_per_km_at(lat: float) -> tuple[float, float]:
+    """Conversion km → degrés à la latitude donnée (lat, lon)."""
+    deg_lat_per_km = 1.0 / 111.0
+    deg_lon_per_km = 1.0 / (111.0 * math.cos(math.radians(lat)))
+    return deg_lat_per_km, deg_lon_per_km
+
+
+# ── Calibration : biais directionnels ─────────────────────────────────────────
+
+def _load_latest_biases(conn: sqlite3.Connection) -> dict:
+    """Charge les biais (Δlat_km, Δlon_km) les plus récents par
+    (island, month, day_offset). Retourne un dict pour lookup rapide."""
+    biases: dict[tuple[str, int, int], tuple[float, float, int]] = {}
+    try:
+        rows = conn.execute("""
+            SELECT b.island, b.month, b.day_offset,
+                   b.mean_delta_lat_km, b.mean_delta_lon_km, b.n_obs
+            FROM calibration_spatial_bias b
+            INNER JOIN (
+                SELECT island, month, day_offset, MAX(computed_at) AS max_at
+                FROM calibration_spatial_bias
+                GROUP BY island, month, day_offset
+            ) latest
+              ON b.island = latest.island
+             AND b.month = latest.month
+             AND b.day_offset = latest.day_offset
+             AND b.computed_at = latest.max_at
+        """).fetchall()
+    except sqlite3.OperationalError:
+        return biases  # table pas encore créée
+
+    for r in rows:
+        if r["mean_delta_lat_km"] is None or r["mean_delta_lon_km"] is None:
+            continue
+        biases[(r["island"], r["month"], r["day_offset"])] = (
+            r["mean_delta_lat_km"], r["mean_delta_lon_km"], r["n_obs"]
+        )
+    return biases
+
+
+def _bias_for(biases: dict, island: str, month: int, day_offset: int):
+    """Retourne (Δlat_km, Δlon_km) si applicable, sinon None.
+    Filtre par MIN_BIAS_NOBS et MAX_BIAS_KM. Fallback : mois courant,
+    sinon M-1, sinon M-2 (les régimes alizés sont quasi-stables sur 2-3 mois)."""
+    for m_try in (month, ((month - 2) % 12) + 1, ((month - 3) % 12) + 1):
+        key = (island, m_try, day_offset)
+        if key not in biases:
+            continue
+        dlat_km, dlon_km, n_obs = biases[key]
+        if n_obs < MIN_BIAS_NOBS:
+            continue
+        if abs(dlat_km) > MAX_BIAS_KM or abs(dlon_km) > MAX_BIAS_KM:
+            continue
+        return (dlat_km, dlon_km)
+    return None
 
 
 # ── Scoring ────────────────────────────────────────────────────────────────────
@@ -263,6 +326,10 @@ def compute_beach_scores(db_path: Path = DB_PATH) -> int:
     computed_at    = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     rows_to_insert = []
 
+    biases = _load_latest_biases(conn) if APPLY_BIAS_CORRECTION else {}
+    sim_dt = datetime.fromisoformat(simulated_at.replace("Z", "+00:00"))
+    bias_hits = 0  # combien de (snap × beach) ont reçu la correction
+
     for snap in snaps:
         day         = snap["day_offset"]
         n_particles = snap["n_particles"] or 0
@@ -277,12 +344,37 @@ def compute_beach_scores(db_path: Path = DB_PATH) -> int:
         n_sample = len(positions)
         ratio    = n_active / n_sample if n_sample > 0 else 0.0
 
+        # Mois de la date prédite (utilisé pour lookup du biais)
+        pred_month = (sim_dt + timedelta(days=day)).month
+
+        # Cache des positions corrigées par île (1 calcul par île × snap)
+        corrected_cache: dict[str, list] = {}
+
         for beach in BEACHES:
-            s = _score_beach(positions, beach["lat"], beach["lon"],
+            island = beach.get("island", "")
+            bias = _bias_for(biases, island, pred_month, day) if biases else None
+
+            if bias and positions:
+                if island not in corrected_cache:
+                    dlat_km, dlon_km = bias
+                    deg_lat_per_km, deg_lon_per_km = _deg_per_km_at(beach["lat"])
+                    # delta_*_km = sim - obs ; corriger = soustraire delta des positions
+                    shift_lon = -dlon_km * deg_lon_per_km
+                    shift_lat = -dlat_km * deg_lat_per_km
+                    corrected_cache[island] = [
+                        [pt[0] + shift_lon, pt[1] + shift_lat]
+                        for pt in positions if len(pt) >= 2
+                    ]
+                positions_to_use = corrected_cache[island]
+                bias_hits += 1
+            else:
+                positions_to_use = positions
+
+            s = _score_beach(positions_to_use, beach["lat"], beach["lon"],
                              beach["radius_km"], ratio)
             rows_to_insert.append((
                 computed_at, simulated_at,
-                beach.get("island", ""),
+                island,
                 beach["name"], beach["lat"], beach["lon"], beach["radius_km"],
                 day,
                 s["sample_count"], n_sample, n_active, n_particles,
@@ -290,6 +382,11 @@ def compute_beach_scores(db_path: Path = DB_PATH) -> int:
                 s["closest_km"], s["density_km2"],
                 risk_label(s["regional_score"]),
             ))
+
+    if APPLY_BIAS_CORRECTION:
+        total = len(rows_to_insert)
+        print(f"  🎯 Correction biais appliquée à {bias_hits}/{total} scores "
+              f"(seuil n_obs ≥ {MIN_BIAS_NOBS}, |Δ| ≤ {MAX_BIAS_KM} km)")
 
     conn.executemany(
         """INSERT INTO beach_risk_scores

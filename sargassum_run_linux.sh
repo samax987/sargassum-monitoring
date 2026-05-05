@@ -3,6 +3,10 @@ set -e
 PYTHON=/opt/sargassum/venv/bin/python3
 DIR=/opt/sargassum
 
+# Active Stokes drift CMEMS Wave (gain ~10% précision dernier km)
+# Nécessite swap (>=2 GB) sur le VPS, sinon OOM-killer.
+export ENABLE_STOKES_DRIFT=1
+
 mkdir -p "$DIR/logs"
 cd "$DIR"
 echo ""

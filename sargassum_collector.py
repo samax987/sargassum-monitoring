@@ -673,6 +673,14 @@ def collect_aviso_duacs(conn: sqlite3.Connection) -> bool:
 
 # ── Source 7 : OpenDrift – simulation de dérive 5 jours ──────────────────────
 
+# ⚠️ Stokes drift désactivé par défaut sur ce VPS (3.9 GB RAM, pas de swap) :
+# avec 3 readers (ANFC + GFS_wind + Stokes) et ~15 000 particules, OpenDrift
+# atteint ~2.7 GB anon-rss et déclenche l'OOM-killer. Pour réactiver, il faut
+# soit ajouter du swap (`fallocate -l 2G /swapfile && mkswap … && swapon …`),
+# soit réduire stride AFAI à 4-5 pour avoir moins de particules.
+ENABLE_STOKES_DRIFT = bool(int(os.environ.get("ENABLE_STOKES_DRIFT", "0")))
+
+
 def _fetch_gfs_wind_caribbean(out_path: Path, forecast_hours: int = 120) -> str | None:
     """
     Télécharge le vent 10m GFS 0.25° depuis NOMADS pour la zone Caraïbes,
@@ -775,6 +783,73 @@ def _fetch_gfs_wind_caribbean(out_path: Path, forecast_hours: int = 120) -> str 
 
     print(f"    → vent GFS : run {date_str}_{hh}z, {n_ok}/{len(fh_steps)} pas, → {out_path.name}")
     return run_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _fetch_stokes_drift_caribbean(
+    out_path: Path,
+    cp_user: str,
+    cp_pass: str,
+    start_dt: datetime,
+    end_dt: datetime,
+) -> bool:
+    """
+    Télécharge la dérive de Stokes (vagues) depuis CMEMS pour la zone Caraïbes.
+
+    Dataset  : cmems_mod_glo_wav_anfc_0.083deg_PT3H-i (résolution 0.083°, pas 3h)
+    Variables: VSDX, VSDY (m/s) → renommées vers les noms CF attendus par OpenDrift
+              (sea_surface_wave_stokes_drift_x_velocity / _y_velocity)
+
+    La dérive de Stokes représente le transport résiduel induit par les vagues —
+    typiquement 5-15 cm/s vers l'ouest aux Antilles (houle d'alizé). Elle s'ajoute
+    au courant et au windage pour préciser la direction d'arrivée des sargasses.
+
+    Retourne True si succès, False sinon.
+    """
+    try:
+        import copernicusmarine
+    except ImportError:
+        print("    [warn] copernicusmarine indisponible — Stokes drift désactivé")
+        return False
+
+    fmt = "%Y-%m-%dT%H:%M:%S"
+    try:
+        ds = copernicusmarine.open_dataset(
+            dataset_id        = "cmems_mod_glo_wav_anfc_0.083deg_PT3H-i",
+            username          = cp_user, password = cp_pass,
+            variables         = ["VSDX", "VSDY"],
+            minimum_latitude  = CARIB["lat_min"] - 3,
+            maximum_latitude  = CARIB["lat_max"] + 3,
+            minimum_longitude = CARIB["lon_min"] - 3,
+            maximum_longitude = CARIB["lon_max"] + 3,
+            start_datetime    = start_dt.strftime(fmt),
+            end_datetime      = end_dt.strftime(fmt),
+        )
+    except Exception as e:
+        print(f"    [warn] CMEMS Wave indisponible : {e}")
+        return False
+
+    # Renommage vers les noms CF attendus par OpenDrift
+    ds = ds.rename({
+        "VSDX": "sea_surface_wave_stokes_drift_x_velocity",
+        "VSDY": "sea_surface_wave_stokes_drift_y_velocity",
+    })
+    ds["sea_surface_wave_stokes_drift_x_velocity"].attrs.update({
+        "units": "m s-1",
+        "standard_name": "sea_surface_wave_stokes_drift_x_velocity",
+    })
+    ds["sea_surface_wave_stokes_drift_y_velocity"].attrs.update({
+        "units": "m s-1",
+        "standard_name": "sea_surface_wave_stokes_drift_y_velocity",
+    })
+    # Sous-échantillonnage temporel à 6h (1 sur 2) — réduit la RAM consommée
+    # par OpenDrift de ~50 % ; les Stokes drift varient peu sur 6h.
+    ds = ds.isel(time=slice(None, None, 2))
+    n_t = int(ds.sizes.get("time", 0))
+    ds.to_netcdf(out_path)
+    ds.close()
+
+    print(f"    → Stokes drift : {n_t} pas de temps (6h) → {out_path.name}")
+    return True
 
 
 def _fetch_afai_positions(stride: int = 3, threshold: float = 0.0001):
@@ -896,6 +971,19 @@ def simulate_drift(conn: sqlite3.Connection) -> bool:
         wind_nc = tmpdir / "gfs_wind.nc"
         wind_run = _fetch_gfs_wind_caribbean(wind_nc, forecast_hours=120)
 
+        # ── 2ter. Téléchargement du Stokes drift (vagues) CMEMS Wave ─────────
+        # Désactivé par défaut sur VPS contraint en RAM (cf. ENABLE_STOKES_DRIFT)
+        stokes_nc = tmpdir / "stokes.nc"
+        stokes_ok = False
+        if ENABLE_STOKES_DRIFT:
+            stokes_ok = _fetch_stokes_drift_caribbean(
+                stokes_nc, cp_user, cp_pass,
+                end_dt - timedelta(days=1),
+                end_dt + timedelta(days=6),
+            )
+        else:
+            print("    → Stokes drift désactivé (ENABLE_STOKES_DRIFT=0)")
+
         # ── 3. Simulation OpenDrift ───────────────────────────────────────────
         print("    → Initialisation OpenDrift…")
         reader_anfc = NCReader(str(anfc_nc))
@@ -908,12 +996,20 @@ def simulate_drift(conn: sqlite3.Connection) -> bool:
             except Exception as e:
                 print(f"    [warn] reader vent KO : {e}")
                 wind_run = None
+        if stokes_ok and stokes_nc.exists():
+            try:
+                reader_stokes = NCReader(str(stokes_nc))
+                readers.append(reader_stokes)
+                print("    → Stokes drift activé")
+            except Exception as e:
+                print(f"    [warn] reader Stokes KO : {e}")
+                stokes_ok = False
 
         od = OceanDrift(loglevel=50)      # silent
         od.add_reader(readers)
         od.set_config("general:use_auto_landmask", True)
         # Windage : sargasses dérivent à ~1 % de la vitesse du vent (Putman et al. 2018)
-        # Appliqué au seeding ; calibré ensuite via sarga_calibration.py.
+        # Appliqué au seeding ; calibré ensuite via sarga_calibration_spatial.py.
         if wind_run:
             od.set_config("seed:wind_drift_factor", 0.01)
 
@@ -957,6 +1053,12 @@ def simulate_drift(conn: sqlite3.Connection) -> bool:
                 for lo, la in zip(lo_act, la_act)
             ]
 
+            current_source = "DUACS+Copernicus"
+            if wind_run:
+                current_source += "+GFS_wind1pct"
+            if stokes_ok:
+                current_source += "+Stokes"
+
             conn.execute(
                 """INSERT INTO drift_predictions
                    (simulated_at, sim_start, sim_end, n_particles, current_source,
@@ -966,7 +1068,7 @@ def simulate_drift(conn: sqlite3.Connection) -> bool:
                 (
                     simulated_at, sim_start_str, sim_end_str,
                     n_particles,
-                    "DUACS+Copernicus+GFS_wind1pct" if wind_run else "DUACS+Copernicus",
+                    current_source,
                     day,
                     round(float(np.nanmin(lo_act)), 3) if n_act else None,
                     round(float(np.nanmax(lo_act)), 3) if n_act else None,
@@ -980,6 +1082,7 @@ def simulate_drift(conn: sqlite3.Connection) -> bool:
                         "afai_date": afai_date,
                         "wind_run": wind_run,
                         "wind_drift_factor": 0.01 if wind_run else 0.0,
+                        "stokes_drift": stokes_ok,
                     }),
                 ),
             )

@@ -1,0 +1,777 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sargasses Saint-Barthélemy — Suivi temps réel</title>
+    <meta name="description" content="Suivi temps réel des sargasses sur les plages de Saint-Barthélemy. Risque d'échouage sur 5 jours, données satellite et modèle OpenDrift.">
+
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: #0a0e27;
+            color: #e0e6ed;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        /* ─── Header ─────────────────────────────────────────────────────── */
+        header {
+            background: linear-gradient(135deg, #0f3460 0%, #16213e 100%);
+            padding: 14px 22px;
+            border-bottom: 1px solid #1a2744;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 12px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.3);
+        }
+        header h1 { font-size: 1.25em; color: #fff; font-weight: 700; letter-spacing: -0.3px; }
+        header .subtitle { font-size: 0.78em; color: #a0a8c0; margin-top: 1px; font-weight: 400; }
+        header .status-pill {
+            padding: 6px 14px;
+            border-radius: 20px;
+            font-size: 0.78em;
+            font-weight: 600;
+            background: rgba(34, 197, 94, 0.15);
+            color: #22c55e;
+            border: 1px solid rgba(34, 197, 94, 0.3);
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        header .status-pill.fail {
+            background: rgba(239, 68, 68, 0.15);
+            color: #ef4444;
+            border-color: rgba(239, 68, 68, 0.3);
+        }
+
+        /* ─── Layout ─────────────────────────────────────────────────────── */
+        #app { display: flex; height: calc(100vh - 64px); }
+        #sidebar { width: 380px; background: #0a0e27; overflow-y: auto; border-right: 1px solid #1a2744; }
+        #map { flex: 1; background: #0a0e27; }
+
+        /* ─── Sections sidebar ───────────────────────────────────────────── */
+        .section { padding: 16px 20px; border-bottom: 1px solid #1a2744; }
+        .section h2 {
+            font-size: 0.72em;
+            color: #e94560;
+            margin-bottom: 12px;
+            text-transform: uppercase;
+            letter-spacing: 1.8px;
+            font-weight: 700;
+        }
+
+        /* ─── Beach cards ────────────────────────────────────────────────── */
+        .beach {
+            background: #16213e;
+            border-radius: 10px;
+            padding: 14px;
+            margin-bottom: 8px;
+            cursor: pointer;
+            transition: all 0.15s;
+            border-left: 3px solid #555;
+            position: relative;
+            overflow: hidden;
+        }
+        .beach::before {
+            content: '';
+            position: absolute;
+            top: 0; left: 0; bottom: 0;
+            width: 3px;
+            background: var(--risk-color, #555);
+            box-shadow: 0 0 12px var(--risk-color, transparent);
+        }
+        .beach:hover { background: #1a2950; transform: translateX(2px); }
+        .beach-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+        .beach-name { font-weight: 600; font-size: 0.95em; color: #fff; }
+        .beach-pill {
+            padding: 3px 10px;
+            border-radius: 12px;
+            font-size: 0.7em;
+            font-weight: 700;
+            color: #fff;
+            letter-spacing: 0.3px;
+            text-transform: uppercase;
+        }
+        .forecast-strip { display: flex; gap: 3px; margin-top: 8px; }
+        .day-dot {
+            flex: 1;
+            height: 6px;
+            border-radius: 3px;
+        }
+        .day-labels { display: flex; gap: 3px; margin-top: 4px; font-size: 0.65em; color: #6c7a99; font-weight: 500; }
+        .day-labels span { flex: 1; text-align: center; }
+
+        /* ─── Time controls ──────────────────────────────────────────────── */
+        .time-control { display: flex; gap: 4px; margin-bottom: 8px; }
+        .time-btn {
+            flex: 1;
+            padding: 8px 4px;
+            background: #16213e;
+            border: 1px solid #1a2744;
+            color: #a0a8c0;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.75em;
+            font-weight: 500;
+            transition: all 0.15s;
+            font-family: inherit;
+        }
+        .time-btn:hover { background: #1a2950; color: #fff; }
+        .time-btn.active { background: #e94560; color: #fff; border-color: #e94560; font-weight: 600; }
+
+        /* ─── Subscribe box ──────────────────────────────────────────────── */
+        .subscribe-box { background: #16213e; padding: 14px; border-radius: 10px; }
+        .subscribe-box select,
+        .subscribe-box button {
+            width: 100%;
+            padding: 10px;
+            border-radius: 6px;
+            border: 1px solid #1a2744;
+            background: #0a0e27;
+            color: #e0e6ed;
+            font-size: 0.85em;
+            margin-bottom: 8px;
+            font-family: inherit;
+        }
+        .subscribe-box button {
+            background: #e94560;
+            color: #fff;
+            border: none;
+            font-weight: 600;
+            cursor: pointer;
+            transition: opacity 0.15s;
+            letter-spacing: 0.2px;
+        }
+        .subscribe-box button:hover { opacity: 0.9; }
+        .subscribe-result {
+            margin-top: 10px;
+            padding: 10px;
+            background: #0a0e27;
+            border-radius: 6px;
+            font-size: 0.82em;
+            display: none;
+        }
+        .subscribe-result a { color: #22c55e; text-decoration: none; font-weight: 600; }
+
+        /* ─── Footer ─────────────────────────────────────────────────────── */
+        .footer-links {
+            padding: 14px 20px;
+            text-align: center;
+            font-size: 0.72em;
+            color: #6c7a99;
+            line-height: 1.6;
+        }
+        .footer-links a { color: #e94560; text-decoration: none; font-weight: 500; }
+
+        /* ─── MARKERS ────────────────────────────────────────────────────── */
+        .beach-marker {
+            position: relative;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            cursor: pointer;
+            pointer-events: auto;
+        }
+        .marker-pin {
+            position: relative;
+            width: 28px;
+            height: 28px;
+            border-radius: 50% 50% 50% 0;
+            background: var(--risk-color, #888);
+            transform: rotate(-45deg);
+            border: 2px solid #fff;
+            box-shadow: 0 3px 8px rgba(0,0,0,0.4), 0 0 0 1px rgba(255,255,255,0.2);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: transform 0.2s;
+        }
+        .marker-pin:hover { transform: rotate(-45deg) scale(1.15); }
+        .marker-pin-icon {
+            transform: rotate(45deg);
+            color: #fff;
+            font-weight: 800;
+            font-size: 11px;
+            font-family: 'Inter', sans-serif;
+            line-height: 1;
+            text-shadow: 0 1px 2px rgba(0,0,0,0.3);
+        }
+        .marker-label {
+            margin-top: 6px;
+            padding: 3px 8px;
+            background: rgba(10, 14, 39, 0.92);
+            color: #fff;
+            font-size: 10.5px;
+            font-weight: 600;
+            border-radius: 4px;
+            white-space: nowrap;
+            border: 1px solid rgba(255,255,255,0.15);
+            font-family: 'Inter', sans-serif;
+            letter-spacing: 0.2px;
+            backdrop-filter: blur(4px);
+            -webkit-backdrop-filter: blur(4px);
+            text-shadow: 0 1px 2px rgba(0,0,0,0.6);
+        }
+
+        /* Pulse animation pour les risques eleves */
+        .marker-pin.pulse::before {
+            content: '';
+            position: absolute;
+            inset: -6px;
+            border-radius: 50% 50% 50% 0;
+            background: var(--risk-color, transparent);
+            opacity: 0.6;
+            animation: pulse-ring 2s ease-out infinite;
+            z-index: -1;
+        }
+        @keyframes pulse-ring {
+            0% { transform: scale(0.9); opacity: 0.7; }
+            70% { transform: scale(1.6); opacity: 0; }
+            100% { transform: scale(1.6); opacity: 0; }
+        }
+
+        /* Drift particles (plus discrets) */
+        .drift-particle {
+            background: #f59e0b;
+            border-radius: 50%;
+            opacity: 0.6;
+            box-shadow: 0 0 4px rgba(245, 158, 11, 0.6);
+        }
+
+        /* ─── Popup Leaflet custom ──────────────────────────────────────── */
+        .leaflet-popup-content-wrapper {
+            background: #16213e;
+            color: #e0e6ed;
+            border-radius: 10px;
+            box-shadow: 0 6px 20px rgba(0,0,0,0.4);
+            border: 1px solid #1a2744;
+        }
+        .leaflet-popup-tip { background: #16213e; }
+        .leaflet-popup-content { margin: 14px 18px; font-family: 'Inter', sans-serif; font-size: 13px; line-height: 1.6; }
+        .leaflet-popup-content strong { color: #fff; font-size: 14px; }
+        .leaflet-popup-close-button { color: #6c7a99 !important; }
+
+        /* ─── Légende ────────────────────────────────────────────────────── */
+        .legend {
+            background: rgba(10, 14, 39, 0.95);
+            color: #e0e6ed;
+            padding: 12px 14px;
+            border-radius: 10px;
+            font-size: 0.78em;
+            line-height: 1.8;
+            border: 1px solid #1a2744;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.3);
+            backdrop-filter: blur(6px);
+            -webkit-backdrop-filter: blur(6px);
+        }
+        .legend strong { color: #e94560; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; display: block; margin-bottom: 6px; }
+        .legend-row { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+        .legend-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            border: 1.5px solid #fff;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+        }
+        .legend small { color: #6c7a99; font-size: 10px; }
+
+        /* ─── Météo widget ───────────────────────────────────────────────── */
+        .weather-card {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background: #16213e;
+            padding: 14px;
+            border-radius: 10px;
+            gap: 10px;
+        }
+        .weather-item {
+            flex: 1;
+            text-align: center;
+            padding: 4px;
+        }
+        .weather-icon { font-size: 1.4em; margin-bottom: 4px; }
+        .weather-value { font-weight: 700; color: #fff; font-size: 1em; }
+        .weather-label { font-size: 0.7em; color: #6c7a99; text-transform: uppercase; letter-spacing: 0.5px; margin-top: 2px; }
+
+        /* ─── Prévisions 3 jours ─────────────────────────────────────────── */
+        .forecast-3d {
+            display: flex;
+            gap: 6px;
+            margin-top: 10px;
+        }
+        .forecast-day {
+            flex: 1;
+            background: #16213e;
+            padding: 10px 8px;
+            border-radius: 8px;
+            text-align: center;
+            position: relative;
+            overflow: hidden;
+        }
+        .forecast-label {
+            font-size: 0.7em;
+            color: #a0a8c0;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            font-weight: 600;
+            margin-bottom: 6px;
+        }
+        .forecast-meta {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.78em;
+            color: #fff;
+            font-weight: 600;
+            gap: 4px;
+        }
+        .forecast-meta span { white-space: nowrap; }
+        .forecast-wind::before { content: '💨 '; opacity: 0.7; }
+        .forecast-swell::before { content: '🌊 '; opacity: 0.7; }
+        .forecast-bar {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            height: 3px;
+            width: var(--level, 0%);
+            background: linear-gradient(90deg, #22c55e 0%, #eab308 50%, #ef4444 100%);
+            transition: width 0.5s ease;
+            border-radius: 0 3px 0 0;
+        }
+
+        /* ─── Loading ────────────────────────────────────────────────────── */
+        .loading { text-align: center; padding: 30px 20px; color: #6c7a99; font-size: 0.85em; }
+        .skeleton {
+            background: linear-gradient(90deg, #16213e 25%, #1a2950 50%, #16213e 75%);
+            background-size: 200% 100%;
+            animation: skeleton-loading 1.5s ease-in-out infinite;
+            border-radius: 8px;
+        }
+        @keyframes skeleton-loading {
+            0% { background-position: 200% 0; }
+            100% { background-position: -200% 0; }
+        }
+
+        /* ─── Mobile ─────────────────────────────────────────────────────── */
+        @media (max-width: 768px) {
+            header { padding: 12px 16px; }
+            header h1 { font-size: 1.05em; }
+            header .subtitle { font-size: 0.72em; }
+            #app { flex-direction: column-reverse; height: calc(100vh - 56px); }
+            #sidebar { width: 100%; height: 50vh; border-right: none; border-top: 1px solid #1a2744; }
+            #map { height: 50vh; }
+            .marker-label { font-size: 9.5px; padding: 2px 6px; }
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <div>
+            <h1>🌊 Sargasses Saint-Barthélemy</h1>
+            <div class="subtitle">Suivi temps réel · Modèle OpenDrift 5 jours</div>
+        </div>
+        <div id="system-status" class="status-pill">
+            <span>•</span><span id="status-text">Vérification...</span>
+        </div>
+    </header>
+
+    <div id="app">
+        <aside id="sidebar">
+            <div class="section">
+                <h2>Horizon de prévision</h2>
+                <div class="time-control">
+                    <button class="time-btn active" data-day="0">Aujourd'hui</button>
+                    <button class="time-btn" data-day="1">J+1</button>
+                    <button class="time-btn" data-day="2">J+2</button>
+                    <button class="time-btn" data-day="3">J+3</button>
+                    <button class="time-btn" data-day="4">J+4</button>
+                </div>
+            </div>
+
+            <div class="section">
+                <h2>Conditions actuelles</h2>
+                <div class="weather-card" id="weather-card">
+                    <div class="weather-item">
+                        <div class="weather-icon">💨</div>
+                        <div class="weather-value" id="w-wind">—</div>
+                        <div class="weather-label">Vent</div>
+                    </div>
+                    <div class="weather-item">
+                        <div class="weather-icon">🌊</div>
+                        <div class="weather-value" id="w-swell">—</div>
+                        <div class="weather-label">Houle</div>
+                    </div>
+                    <div class="weather-item">
+                        <div class="weather-icon">🌡️</div>
+                        <div class="weather-value" id="w-temp">—</div>
+                        <div class="weather-label">Eau</div>
+                    </div>
+                </div>
+
+                <div class="forecast-3d" id="forecast-3d">
+                    <div class="forecast-day" data-day="0">
+                        <div class="forecast-label">Aujourd'hui</div>
+                        <div class="forecast-meta">
+                            <span class="forecast-wind">— kn</span>
+                            <span class="forecast-swell">— m</span>
+                        </div>
+                        <div class="forecast-bar" style="--level: 0%"></div>
+                    </div>
+                    <div class="forecast-day" data-day="1">
+                        <div class="forecast-label">Demain</div>
+                        <div class="forecast-meta">
+                            <span class="forecast-wind">— kn</span>
+                            <span class="forecast-swell">— m</span>
+                        </div>
+                        <div class="forecast-bar" style="--level: 0%"></div>
+                    </div>
+                    <div class="forecast-day" data-day="2">
+                        <div class="forecast-label">J+2</div>
+                        <div class="forecast-meta">
+                            <span class="forecast-wind">— kn</span>
+                            <span class="forecast-swell">— m</span>
+                        </div>
+                        <div class="forecast-bar" style="--level: 0%"></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="section">
+                <h2>Plages SBH</h2>
+                <div id="beaches-list" class="loading">
+                    <div class="skeleton" style="height:80px;margin-bottom:8px;"></div>
+                    <div class="skeleton" style="height:80px;margin-bottom:8px;"></div>
+                    <div class="skeleton" style="height:80px;"></div>
+                </div>
+            </div>
+
+            <div class="section">
+                <h2>Alertes Telegram</h2>
+                <div class="subscribe-box">
+                    <select id="subscribe-beach">
+                        <option value="">Choisir une plage...</option>
+                    </select>
+                    <button onclick="subscribeToBeach()">M'abonner via Telegram</button>
+                    <div id="subscribe-result" class="subscribe-result"></div>
+                </div>
+            </div>
+
+            <div class="footer-links">
+                Sources : AVISO+, Copernicus Marine, NOAA, OpenDrift<br>
+                <a href="/dashboard" target="_blank">Dashboard technique →</a>
+            </div>
+        </aside>
+
+        <div id="map"></div>
+    </div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script>
+        const SBH_CENTER = [17.9, -62.83];
+        let currentDay = 0;
+        let beachData = {};
+        let driftLayer = null;
+        let beachLayer = null;
+
+        // === Init carte ===
+        const map = L.map('map', {
+            center: SBH_CENTER,
+            zoom: 13,
+            zoomControl: true,
+            attributionControl: true,
+        });
+
+        // Fond satellite Esri
+        L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+            attribution: 'Esri, Maxar', maxZoom: 19,
+        }).addTo(map);
+
+        // Labels villes/routes (CartoDB plus propre que Stamen)
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}.png', {
+            attribution: '© CartoDB',
+            maxZoom: 19,
+            opacity: 0.85,
+        }).addTo(map);
+
+        beachLayer = L.layerGroup().addTo(map);
+        driftLayer = L.layerGroup().addTo(map);
+
+        // === Légende ===
+        const legend = L.control({ position: 'bottomright' });
+        legend.onAdd = function () {
+            const div = L.DomUtil.create('div', 'legend');
+            div.innerHTML = `
+                <strong>Risque d'échouage</strong>
+                <div class="legend-row"><span class="legend-dot" style="background:#22c55e"></span>Aucun</div>
+                <div class="legend-row"><span class="legend-dot" style="background:#eab308"></span>Faible</div>
+                <div class="legend-row"><span class="legend-dot" style="background:#f97316"></span>Moyen</div>
+                <div class="legend-row"><span class="legend-dot" style="background:#ef4444"></span>Fort</div>
+                <small>Score régional σ = 50 km</small>
+            `;
+            return div;
+        };
+        legend.addTo(map);
+
+        // === Création des markers pro ===
+        function createBeachMarker(beach, day) {
+            const dayData = beach.forecast.find(f => f.day_offset === day);
+            if (!dayData) return null;
+
+            const color = dayData.color;
+            const level = dayData.risk_level;
+            const isHigh = level === 'high' || level === 'medium';
+            const pulseClass = isHigh ? 'pulse' : '';
+
+            // Premières lettres pour les markers
+            const initials = beach.name.replace(/_/g, ' ').split(/[ -]/)
+                .filter(w => w.length > 0).slice(0, 2)
+                .map(w => w[0].toUpperCase()).join('');
+
+            const html = `
+                <div class="beach-marker">
+                    <div class="marker-pin ${pulseClass}" style="--risk-color: ${color}">
+                        <span class="marker-pin-icon">${initials}</span>
+                    </div>
+                    <div class="marker-label">${beach.name.replace(/_/g, ' ')}</div>
+                </div>
+            `;
+
+            const icon = L.divIcon({
+                html,
+                className: 'beach-marker-wrap',
+                iconSize: [28, 50],
+                iconAnchor: [14, 28],  // pointe du pin au point GPS
+                popupAnchor: [0, -28],
+            });
+
+            const marker = L.marker([beach.lat, beach.lon], { icon });
+            marker.bindPopup(`
+                <strong>${beach.name.replace(/_/g, ' ')}</strong><br>
+                Risque J+${day} : <span style="color:${color};font-weight:600">${dayData.label}</span><br>
+                Score régional : ${dayData.regional_score}<br>
+                Particule la plus proche : <strong>${dayData.closest_km} km</strong>
+            `);
+            return marker;
+        }
+
+        // === Chargement des données ===
+        async function loadStatus() {
+            try {
+                const res = await fetch('/api/status');
+                const data = await res.json();
+                beachData = data;
+                renderBeaches(data.beaches);
+                populateSubscribeDropdown(data.beaches);
+                updateMap();
+            } catch (e) {
+                document.getElementById('beaches-list').innerHTML =
+                    '<div style="color:#ef4444;padding:20px;text-align:center">Erreur de chargement</div>';
+            }
+        }
+
+        async function loadDrift(day) {
+            try {
+                const res = await fetch(`/api/drift?day=${day}`);
+                if (!res.ok) return;
+                const data = await res.json();
+                renderDrift(data);
+            } catch (e) { console.error(e); }
+        }
+
+        async function loadHealth() {
+            try {
+                const res = await fetch('/api/health');
+                const data = await res.json();
+                const pill = document.getElementById('system-status');
+                const text = document.getElementById('status-text');
+                if (data.status === 'ok') {
+                    text.textContent = 'Système opérationnel';
+                    pill.className = 'status-pill';
+                } else {
+                    text.textContent = data.failures || 'Problème détecté';
+                    pill.className = 'status-pill fail';
+                }
+            } catch (e) {
+                document.getElementById('status-text').textContent = 'Statut inconnu';
+            }
+        }
+
+        // Météo SBH via Open-Meteo (gratuit, sans clé)
+        async function loadWeather() {
+            try {
+                const lat = 17.9, lon = -62.83;
+
+                // === Conditions actuelles + prévisions journalières (vent) ===
+                const wRes = await fetch(
+                    `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}` +
+                    `&current=wind_speed_10m,wind_direction_10m` +
+                    `&daily=wind_speed_10m_max,wind_direction_10m_dominant` +
+                    `&wind_speed_unit=kn&forecast_days=3&timezone=America/St_Barthelemy`
+                );
+                const w = await wRes.json();
+                if (w.current) {
+                    const speed = Math.round(w.current.wind_speed_10m);
+                    const dir = degToCompass(w.current.wind_direction_10m);
+                    document.getElementById('w-wind').textContent = `${speed} kn ${dir}`;
+                }
+
+                // === Conditions actuelles + prévisions journalières (mer) ===
+                const mRes = await fetch(
+                    `https://marine-api.open-meteo.com/v1/marine?latitude=${lat}&longitude=${lon}` +
+                    `&current=wave_height,sea_surface_temperature` +
+                    `&daily=wave_height_max,wave_direction_dominant` +
+                    `&forecast_days=3&timezone=America/St_Barthelemy`
+                );
+                const m = await mRes.json();
+                if (m.current) {
+                    document.getElementById('w-swell').textContent = `${m.current.wave_height.toFixed(1)} m`;
+                    document.getElementById('w-temp').textContent = `${m.current.sea_surface_temperature.toFixed(0)}°C`;
+                }
+
+                // === Prévisions 3 jours ===
+                if (w.daily && m.daily) {
+                    const days = document.querySelectorAll('.forecast-day');
+                    days.forEach((dayEl, i) => {
+                        const windKn = Math.round(w.daily.wind_speed_10m_max[i] || 0);
+                        const windDir = degToCompass(w.daily.wind_direction_10m_dominant[i] || 0);
+                        const waveM = (m.daily.wave_height_max[i] || 0).toFixed(1);
+
+                        dayEl.querySelector('.forecast-wind').textContent = `${windKn} kn ${windDir}`;
+                        dayEl.querySelector('.forecast-swell').textContent = `${waveM} m`;
+
+                        // Indicateur de "puissance" : combinaison vent + houle
+                        // 0% (calme) → 100% (très agité)
+                        // 15 kn + 1.5 m = milieu (50%)
+                        // 30 kn + 3 m = max (100%)
+                        const score = Math.min(100, (windKn / 30) * 50 + (parseFloat(waveM) / 3) * 50);
+                        dayEl.querySelector('.forecast-bar').style.setProperty('--level', score + '%');
+                    });
+                }
+            } catch (e) {
+                console.error('Météo erreur:', e);
+            }
+        }
+
+        function degToCompass(deg) {
+            const dirs = ['N','NE','E','SE','S','SO','O','NO'];
+            return dirs[Math.round(deg / 45) % 8];
+        }
+
+        // === Rendu sidebar ===
+        function renderBeaches(beaches) {
+            const container = document.getElementById('beaches-list');
+            container.innerHTML = '';
+
+            const rank = { high: 3, medium: 2, low: 1, none: 0 };
+            beaches.sort((a, b) => rank[b.worst_3d] - rank[a.worst_3d]);
+
+            beaches.forEach(beach => {
+                const card = document.createElement('div');
+                card.className = 'beach';
+                card.style.setProperty('--risk-color', beach.worst_3d_color);
+                card.onclick = () => map.flyTo([beach.lat, beach.lon], 16, { duration: 0.8 });
+
+                const days = beach.forecast.slice(0, 5);
+                const dots = days.map(d =>
+                    `<div class="day-dot" style="background:${d.color}" title="J+${d.day_offset}: ${d.label}"></div>`
+                ).join('');
+
+                card.innerHTML = `
+                    <div class="beach-header">
+                        <div class="beach-name">${beach.name.replace(/_/g, ' ')}</div>
+                        <span class="beach-pill" style="background:${beach.worst_3d_color}">${beach.worst_3d_label}</span>
+                    </div>
+                    <div class="forecast-strip">${dots}</div>
+                    <div class="day-labels">
+                        <span>J+0</span><span>J+1</span><span>J+2</span><span>J+3</span><span>J+4</span>
+                    </div>
+                `;
+                container.appendChild(card);
+            });
+        }
+
+        // === Update carte ===
+        function updateMap() {
+            beachLayer.clearLayers();
+            if (!beachData.beaches) return;
+
+            beachData.beaches.forEach(beach => {
+                const marker = createBeachMarker(beach, currentDay);
+                if (marker) beachLayer.addLayer(marker);
+            });
+
+            loadDrift(currentDay);
+        }
+
+        function renderDrift(data) {
+            driftLayer.clearLayers();
+            if (!data.positions) return;
+
+            // Échantillonnage : on prend 1 point sur 3 jusqu'à 200 max
+            const step = Math.max(1, Math.floor(data.positions.length / 200));
+            for (let i = 0; i < data.positions.length; i += step) {
+                const [lon, lat] = data.positions[i];
+                L.circleMarker([lat, lon], {
+                    radius: 1.8,
+                    fillColor: '#f59e0b',
+                    color: '#f59e0b',
+                    weight: 0,
+                    fillOpacity: 0.45,
+                    className: 'drift-particle',
+                }).addTo(driftLayer);
+            }
+        }
+
+        // === Boutons jours ===
+        document.querySelectorAll('.time-btn').forEach(btn => {
+            btn.onclick = () => {
+                document.querySelectorAll('.time-btn').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                currentDay = parseInt(btn.dataset.day);
+                updateMap();
+            };
+        });
+
+        // === Subscribe ===
+        function populateSubscribeDropdown(beaches) {
+            const sel = document.getElementById('subscribe-beach');
+            sel.innerHTML = '<option value="">Choisir une plage...</option>';
+            beaches.forEach(b => {
+                const opt = document.createElement('option');
+                opt.value = b.name;
+                opt.textContent = b.name.replace(/_/g, ' ');
+                sel.appendChild(opt);
+            });
+        }
+
+        async function subscribeToBeach() {
+            const beach = document.getElementById('subscribe-beach').value;
+            if (!beach) { alert('Choisis une plage'); return; }
+            const res = await fetch('/api/subscribe', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ beach }),
+            });
+            const data = await res.json();
+            const resultDiv = document.getElementById('subscribe-result');
+            resultDiv.style.display = 'block';
+            resultDiv.innerHTML = `<a href="${data.telegram_link}" target="_blank">→ Ouvrir Telegram et m'abonner à ${beach.replace(/_/g, ' ')}</a>`;
+        }
+
+        // === Init ===
+        loadStatus();
+        loadHealth();
+        loadWeather();
+        setInterval(() => { loadStatus(); loadHealth(); }, 5 * 60 * 1000);
+        setInterval(loadWeather, 15 * 60 * 1000);
+    </script>
+</body>
+</html>

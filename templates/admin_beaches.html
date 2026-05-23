@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin — Configuration des plages</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Inter', sans-serif; background: #0a0e27; color: #e0e6ed; height: 100vh; overflow: hidden; }
+
+        header {
+            background: linear-gradient(135deg, #16213e 0%, #0f3460 100%);
+            padding: 12px 20px;
+            border-bottom: 1px solid #1a2744;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        header h1 { font-size: 1.05em; color: #fff; }
+        header .badge { background: #e94560; color: #fff; padding: 3px 10px; border-radius: 12px; font-size: 0.75em; font-weight: 600; }
+        header a { color: #a0a8c0; text-decoration: none; font-size: 0.85em; }
+
+        #app { display: flex; height: calc(100vh - 56px); }
+        #sidebar { width: 380px; background: #0a0e27; overflow-y: auto; border-right: 1px solid #1a2744; }
+        #map { flex: 1; }
+
+        .toolbar { padding: 14px 16px; border-bottom: 1px solid #1a2744; display: flex; gap: 8px; }
+        .toolbar select, .toolbar input {
+            flex: 1; padding: 8px 10px; background: #16213e; border: 1px solid #1a2744;
+            color: #e0e6ed; border-radius: 6px; font-family: inherit; font-size: 0.85em;
+        }
+        .btn {
+            padding: 8px 14px; background: #e94560; color: #fff; border: none;
+            border-radius: 6px; cursor: pointer; font-weight: 600; font-family: inherit;
+            font-size: 0.85em; transition: opacity 0.15s;
+        }
+        .btn:hover { opacity: 0.9; }
+        .btn.secondary { background: #1a2744; }
+        .btn.danger { background: #b91c1c; }
+
+        .beach-row {
+            padding: 12px 16px;
+            border-bottom: 1px solid #1a2744;
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            transition: background 0.15s;
+        }
+        .beach-row:hover { background: #16213e; }
+        .beach-row.active { background: #1a2950; border-left: 3px solid #e94560; }
+        .beach-row.inactive { opacity: 0.4; }
+        .beach-info-name { font-weight: 600; font-size: 0.92em; color: #fff; }
+        .beach-info-meta { font-size: 0.72em; color: #6c7a99; margin-top: 2px; }
+        .beach-island-pill {
+            font-size: 0.65em; padding: 2px 8px; border-radius: 10px;
+            background: #1a2744; color: #a0a8c0; text-transform: uppercase;
+        }
+
+        #editor {
+            position: fixed; right: 20px; top: 80px;
+            width: 320px; background: rgba(10, 14, 39, 0.97);
+            border: 1px solid #1a2744; border-radius: 12px; padding: 18px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+            z-index: 1000;
+            display: none;
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+        }
+        #editor.visible { display: block; }
+        #editor h3 { color: #fff; margin-bottom: 16px; font-size: 1em; }
+        #editor .field { margin-bottom: 12px; }
+        #editor label { display: block; font-size: 0.72em; color: #a0a8c0; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; font-weight: 600; }
+        #editor input, #editor select {
+            width: 100%; padding: 8px 10px; background: #16213e; border: 1px solid #1a2744;
+            color: #e0e6ed; border-radius: 6px; font-size: 0.9em; font-family: inherit;
+        }
+        #editor .coords { display: flex; gap: 8px; }
+        #editor .actions { display: flex; gap: 8px; margin-top: 16px; }
+        #editor .actions button { flex: 1; }
+        #editor .hint { font-size: 0.72em; color: #6c7a99; margin-top: 4px; font-style: italic; }
+
+        .toast {
+            position: fixed; top: 70px; left: 50%; transform: translateX(-50%);
+            padding: 10px 20px; border-radius: 8px; font-weight: 600;
+            background: #22c55e; color: #fff; z-index: 2000; opacity: 0;
+            transition: opacity 0.3s;
+        }
+        .toast.show { opacity: 1; }
+        .toast.error { background: #ef4444; }
+
+        /* Markers admin (cercle simple) */
+        .admin-marker {
+            background: #e94560; border: 2px solid #fff; border-radius: 50%;
+            width: 14px; height: 14px; box-shadow: 0 2px 6px rgba(0,0,0,0.4);
+            cursor: grab;
+        }
+        .admin-marker.active { background: #22c55e; width: 18px; height: 18px; box-shadow: 0 0 12px #22c55e; }
+        .admin-marker-label {
+            position: absolute; left: 18px; top: -3px; white-space: nowrap;
+            background: rgba(10,14,39,0.9); color: #fff; padding: 2px 6px;
+            border-radius: 4px; font-size: 10px; font-weight: 600;
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <div>
+            <h1>⚙ Admin — Configuration des plages <span class="badge" id="beach-count">…</span></h1>
+        </div>
+        <div>
+            <a href="/" target="_blank">Voir le site →</a>
+        </div>
+    </header>
+
+    <div id="app">
+        <aside id="sidebar">
+            <div class="toolbar">
+                <select id="filter-island">
+                    <option value="">Toutes les îles</option>
+                </select>
+                <button class="btn" onclick="newBeach()">+ Nouvelle</button>
+            </div>
+            <div id="beaches-list"></div>
+        </aside>
+        <div id="map"></div>
+    </div>
+
+    <div id="editor">
+        <h3 id="editor-title">Édition</h3>
+        <div class="field">
+            <label>Nom</label>
+            <input type="text" id="ed-name" placeholder="Ex: Flamands">
+        </div>
+        <div class="field">
+            <label>Île</label>
+            <select id="ed-island">
+                <option>Saint-Barth</option>
+                <option>Saint-Martin</option>
+                <option>Martinique</option>
+                <option>Guadeloupe</option>
+                <option>Marie-Galante</option>
+            </select>
+        </div>
+        <div class="field">
+            <label>Coordonnées GPS</label>
+            <div class="coords">
+                <input type="number" step="0.0001" id="ed-lat" placeholder="Latitude">
+                <input type="number" step="0.0001" id="ed-lon" placeholder="Longitude">
+            </div>
+            <div class="hint">Glisse le marker sur la carte pour ajuster</div>
+        </div>
+        <div class="field">
+            <label>Rayon de capture (km)</label>
+            <input type="number" step="0.1" id="ed-radius" value="2.0">
+        </div>
+        <div class="field">
+            <label>
+                <input type="checkbox" id="ed-active" checked style="width:auto;margin-right:6px;">
+                Active
+            </label>
+        </div>
+        <div class="actions">
+            <button class="btn secondary" onclick="closeEditor()">Annuler</button>
+            <button class="btn danger" onclick="deleteBeach()" id="btn-delete" style="display:none">Désactiver</button>
+            <button class="btn" onclick="saveBeach()">Enregistrer</button>
+        </div>
+    </div>
+
+    <div id="toast" class="toast"></div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script>
+        // ── Init carte ─────────────────────────────────────────────────────
+        const map = L.map('map', { center: [17.9, -62.83], zoom: 13 });
+        L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+            attribution: 'Esri', maxZoom: 19,
+        }).addTo(map);
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}.png', {
+            opacity: 0.8, maxZoom: 19,
+        }).addTo(map);
+
+        let beaches = [];
+        let markers = {};   // id → L.Marker
+        let editingBeach = null;  // beach object en cours d'edition
+        let editingMarker = null; // L.Marker drag
+
+        // ── Chargement liste ────────────────────────────────────────────────
+        async function loadBeaches() {
+            const auth = btoa('sam:' + getPassword());
+            const res = await fetch('/admin/api/beaches', { headers: { 'Authorization': 'Basic ' + auth } });
+            if (!res.ok) { alert('Authentification echouee'); location.reload(); return; }
+            const data = await res.json();
+            beaches = data.beaches;
+            document.getElementById('beach-count').textContent = beaches.length;
+            populateIslandFilter();
+            renderList();
+            renderMapMarkers();
+        }
+
+        function getPassword() {
+            // Le navigateur garde l'auth basic en cache une fois saisie
+            return '';
+        }
+
+        function populateIslandFilter() {
+            const islands = [...new Set(beaches.map(b => b.island))].sort();
+            const sel = document.getElementById('filter-island');
+            sel.innerHTML = '<option value="">Toutes les îles (' + beaches.length + ')</option>';
+            islands.forEach(island => {
+                const count = beaches.filter(b => b.island === island).length;
+                const opt = document.createElement('option');
+                opt.value = island;
+                opt.textContent = `${island} (${count})`;
+                sel.appendChild(opt);
+            });
+        }
+
+        document.getElementById('filter-island').addEventListener('change', renderList);
+
+        function renderList() {
+            const filter = document.getElementById('filter-island').value;
+            const filtered = filter ? beaches.filter(b => b.island === filter) : beaches;
+            const list = document.getElementById('beaches-list');
+            list.innerHTML = '';
+            filtered.forEach(b => {
+                const row = document.createElement('div');
+                row.className = 'beach-row' + (b.active ? '' : ' inactive');
+                row.dataset.id = b.id;
+                row.onclick = () => editBeach(b);
+                row.innerHTML = `
+                    <div>
+                        <div class="beach-info-name">${b.name.replace(/_/g, ' ')}</div>
+                        <div class="beach-info-meta">${b.lat.toFixed(4)}, ${b.lon.toFixed(4)} · r=${b.radius_km}km</div>
+                    </div>
+                    <div class="beach-island-pill">${b.island}</div>
+                `;
+                list.appendChild(row);
+            });
+        }
+
+        // ── Markers carte ───────────────────────────────────────────────────
+        function renderMapMarkers() {
+            Object.values(markers).forEach(m => map.removeLayer(m));
+            markers = {};
+            beaches.forEach(b => {
+                if (!b.active) return;
+                const icon = L.divIcon({
+                    html: `<div class="admin-marker"></div><div class="admin-marker-label">${b.name.replace(/_/g, ' ')}</div>`,
+                    className: '',
+                    iconSize: [14, 14],
+                    iconAnchor: [7, 7],
+                });
+                const m = L.marker([b.lat, b.lon], { icon }).addTo(map);
+                m.on('click', () => editBeach(b));
+                markers[b.id] = m;
+            });
+        }
+
+        // ── Editor ──────────────────────────────────────────────────────────
+        function editBeach(beach) {
+            editingBeach = beach;
+            document.getElementById('editor-title').textContent = beach.id ? 'Éditer ' + beach.name.replace(/_/g, ' ') : 'Nouvelle plage';
+            document.getElementById('ed-name').value = beach.name || '';
+            document.getElementById('ed-island').value = beach.island || 'Saint-Barth';
+            document.getElementById('ed-lat').value = beach.lat || '';
+            document.getElementById('ed-lon').value = beach.lon || '';
+            document.getElementById('ed-radius').value = beach.radius_km || 2.0;
+            document.getElementById('ed-active').checked = beach.active !== 0;
+            document.getElementById('btn-delete').style.display = beach.id ? 'block' : 'none';
+            document.getElementById('editor').classList.add('visible');
+
+            // Highlight row
+            document.querySelectorAll('.beach-row').forEach(r => r.classList.remove('active'));
+            const row = document.querySelector(`.beach-row[data-id="${beach.id}"]`);
+            if (row) row.classList.add('active');
+
+            // Centre la carte et active le drag
+            if (beach.lat && beach.lon) {
+                map.flyTo([beach.lat, beach.lon], 16, { duration: 0.5 });
+            }
+            setupDraggableEditMarker(beach);
+        }
+
+        function setupDraggableEditMarker(beach) {
+            if (editingMarker) map.removeLayer(editingMarker);
+            const lat = parseFloat(beach.lat) || 17.9;
+            const lon = parseFloat(beach.lon) || -62.83;
+
+            const icon = L.divIcon({
+                html: '<div class="admin-marker active"></div>',
+                className: '',
+                iconSize: [18, 18],
+                iconAnchor: [9, 9],
+            });
+            editingMarker = L.marker([lat, lon], { icon, draggable: true }).addTo(map);
+            editingMarker.on('drag dragend', e => {
+                const { lat, lng } = e.target.getLatLng();
+                document.getElementById('ed-lat').value = lat.toFixed(5);
+                document.getElementById('ed-lon').value = lng.toFixed(5);
+            });
+        }
+
+        function newBeach() {
+            editBeach({ name: '', island: 'Saint-Barth', lat: 17.9, lon: -62.83, radius_km: 2.0, active: 1 });
+        }
+
+        function closeEditor() {
+            document.getElementById('editor').classList.remove('visible');
+            if (editingMarker) { map.removeLayer(editingMarker); editingMarker = null; }
+            editingBeach = null;
+            document.querySelectorAll('.beach-row').forEach(r => r.classList.remove('active'));
+        }
+
+        async function saveBeach() {
+            const data = {
+                name: document.getElementById('ed-name').value.trim(),
+                island: document.getElementById('ed-island').value,
+                lat: parseFloat(document.getElementById('ed-lat').value),
+                lon: parseFloat(document.getElementById('ed-lon').value),
+                radius_km: parseFloat(document.getElementById('ed-radius').value),
+                active: document.getElementById('ed-active').checked,
+            };
+            if (!data.name || isNaN(data.lat) || isNaN(data.lon)) {
+                showToast('Nom + coordonnees obligatoires', true);
+                return;
+            }
+
+            const url = editingBeach.id
+                ? `/admin/api/beaches/${editingBeach.id}`
+                : '/admin/api/beaches';
+            const method = editingBeach.id ? 'PUT' : 'POST';
+            const res = await fetch(url, {
+                method,
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(data),
+            });
+            const result = await res.json();
+            if (res.ok) {
+                showToast(editingBeach.id ? 'Modifie ✓' : 'Cree ✓');
+                closeEditor();
+                await loadBeaches();
+            } else {
+                showToast(result.error || 'Erreur', true);
+            }
+        }
+
+        async function deleteBeach() {
+            if (!editingBeach || !editingBeach.id) return;
+            if (!confirm(`Desactiver "${editingBeach.name.replace(/_/g, ' ')}" ?`)) return;
+            const res = await fetch(`/admin/api/beaches/${editingBeach.id}/delete`, { method: 'POST' });
+            if (res.ok) {
+                showToast('Desactivee ✓');
+                closeEditor();
+                await loadBeaches();
+            } else {
+                showToast('Erreur', true);
+            }
+        }
+
+        function showToast(msg, isError = false) {
+            const t = document.getElementById('toast');
+            t.textContent = msg;
+            t.className = 'toast show' + (isError ? ' error' : '');
+            setTimeout(() => t.classList.remove('show'), 2500);
+        }
+
+        loadBeaches();
+    </script>
+</body>
+</html>

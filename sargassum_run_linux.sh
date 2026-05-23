@@ -24,8 +24,12 @@ echo "[2/4] Simulation de dérive OpenDrift…"
 echo "[3/4] Calcul des scores de plage…"
 "$PYTHON" "$DIR/beaches.py"
 
-echo "[4/4] Alertes Telegram…"
+echo "[4a/4] Alerte Telegram groupée (chat principal)…"
 "$PYTHON" "$DIR/sargassum_alert.py" || \
-    echo "  ⚠️  Alerte Telegram échouée — non bloquant"
+    echo "  ⚠️  Alerte Telegram groupée échouée — non bloquant"
+
+echo "[4b/4] Alertes Telegram personnalisées (abonnés)…"
+"$PYTHON" "$DIR/sargassum_alert_subscribers.py" || \
+    echo "  ⚠️  Alertes abonnés échouées — non bloquant"
 
 echo "✅  Run terminé — $(date -u '+%Y-%m-%dT%H:%M:%SZ')"

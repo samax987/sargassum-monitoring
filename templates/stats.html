@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Statistiques — Sargasses Saint-Barthélemy</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Inter', sans-serif; background: #0a0e27; color: #e0e6ed; min-height: 100vh; padding: 20px; }
+
+        header {
+            text-align: center;
+            margin-bottom: 30px;
+            padding: 20px;
+            background: linear-gradient(135deg, #16213e 0%, #0f3460 100%);
+            border-radius: 16px;
+            border: 1px solid #1a2744;
+        }
+        header h1 { font-size: 1.6em; color: #fff; margin-bottom: 4px; }
+        header p { color: #a0a8c0; font-size: 0.9em; }
+        header a { color: #e94560; text-decoration: none; font-weight: 600; }
+
+        .container { max-width: 1200px; margin: 0 auto; }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+
+        .card {
+            background: #16213e;
+            padding: 20px;
+            border-radius: 12px;
+            border: 1px solid #1a2744;
+            position: relative;
+            overflow: hidden;
+        }
+        .card::after {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background: linear-gradient(135deg, transparent 40%, rgba(233, 69, 96, 0.05));
+            pointer-events: none;
+        }
+        .card h3 {
+            font-size: 0.72em;
+            color: #a0a8c0;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+        .card .value { font-size: 2.2em; font-weight: 800; color: #fff; line-height: 1; }
+        .card .sub { font-size: 0.8em; color: #6c7a99; margin-top: 4px; }
+        .card.accent { background: linear-gradient(135deg, #16213e 0%, #1a2950 100%); border-color: rgba(233, 69, 96, 0.3); }
+        .card.accent .value { color: #e94560; }
+
+        .row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 24px; }
+        @media (max-width: 768px) { .row { grid-template-columns: 1fr; } }
+
+        .section {
+            background: #16213e;
+            padding: 20px;
+            border-radius: 12px;
+            border: 1px solid #1a2744;
+        }
+        .section h2 {
+            font-size: 0.85em;
+            color: #e94560;
+            text-transform: uppercase;
+            letter-spacing: 1.5px;
+            font-weight: 700;
+            margin-bottom: 16px;
+        }
+
+        .bar-item { margin-bottom: 12px; }
+        .bar-label { display: flex; justify-content: space-between; font-size: 0.85em; margin-bottom: 4px; color: #e0e6ed; }
+        .bar-label strong { font-weight: 600; }
+        .bar-track { height: 8px; background: #0a0e27; border-radius: 4px; overflow: hidden; }
+        .bar-fill { height: 100%; background: linear-gradient(90deg, #e94560, #f97316); border-radius: 4px; transition: width 0.5s; }
+
+        .risk-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-top: 12px; }
+        .risk-cell {
+            padding: 12px 8px;
+            text-align: center;
+            background: #0a0e27;
+            border-radius: 8px;
+            border-top: 3px solid var(--c);
+        }
+        .risk-cell .num { font-size: 1.4em; font-weight: 700; color: var(--c); }
+        .risk-cell .lbl { font-size: 0.7em; color: #6c7a99; text-transform: uppercase; letter-spacing: 0.5px; margin-top: 2px; }
+
+        .island-row { padding: 10px 0; border-bottom: 1px solid #1a2744; }
+        .island-row:last-child { border-bottom: none; }
+        .island-row .name { font-weight: 600; color: #fff; margin-bottom: 6px; }
+
+        .timeline { height: 80px; display: flex; align-items: flex-end; gap: 2px; padding: 4px 0; }
+        .timeline-bar {
+            flex: 1; background: #e94560; border-radius: 2px 2px 0 0;
+            min-height: 4px; opacity: 0.7; transition: opacity 0.2s;
+            position: relative;
+        }
+        .timeline-bar:hover { opacity: 1; }
+        .timeline-bar:hover::after {
+            content: attr(data-tooltip);
+            position: absolute; bottom: 100%; left: 50%; transform: translateX(-50%);
+            background: #0a0e27; padding: 4px 8px; border-radius: 4px;
+            font-size: 0.7em; white-space: nowrap; border: 1px solid #1a2744;
+        }
+
+        .status-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 0;
+            border-bottom: 1px solid #0a0e27;
+        }
+        .status-row:last-child { border-bottom: none; }
+        .status-label { color: #a0a8c0; font-size: 0.85em; }
+        .status-value { color: #fff; font-weight: 600; font-size: 0.85em; }
+
+        footer { text-align: center; padding: 20px; color: #6c7a99; font-size: 0.8em; margin-top: 20px; }
+        footer a { color: #e94560; text-decoration: none; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>📊 Statistiques publiques</h1>
+            <p>Sargasses Saint-Barthélemy · <a href="/">← Retour à la carte</a></p>
+        </header>
+
+        <div class="grid" id="counters">
+            <div class="card accent">
+                <h3>Abonnés Telegram</h3>
+                <div class="value" id="c-users">—</div>
+                <div class="sub" id="c-subs-detail">— abonnements</div>
+            </div>
+            <div class="card">
+                <h3>Alertes envoyées</h3>
+                <div class="value" id="c-alerts">—</div>
+                <div class="sub" id="c-alerts-7d">— sur 7 derniers jours</div>
+            </div>
+            <div class="card">
+                <h3>Simulations OpenDrift</h3>
+                <div class="value" id="c-drift">—</div>
+                <div class="sub">Particules suivies sur 5 jours</div>
+            </div>
+            <div class="card">
+                <h3>Plages surveillées</h3>
+                <div class="value" id="c-beaches">—</div>
+                <div class="sub">Aux Antilles françaises</div>
+            </div>
+        </div>
+
+        <div class="row">
+            <div class="section">
+                <h2>État du système</h2>
+                <div class="status-row">
+                    <span class="status-label">Dernière collecte AVISO/Copernicus</span>
+                    <span class="status-value" id="t-collect">—</span>
+                </div>
+                <div class="status-row">
+                    <span class="status-label">Dernier scoring des plages</span>
+                    <span class="status-value" id="t-scoring">—</span>
+                </div>
+                <div class="status-row">
+                    <span class="status-label">Dernière alerte Telegram</span>
+                    <span class="status-value" id="t-alert">—</span>
+                </div>
+                <div class="status-row">
+                    <span class="status-label">Observations en base</span>
+                    <span class="status-value" id="c-obs">—</span>
+                </div>
+            </div>
+
+            <div class="section">
+                <h2>Risque actuel par île (J+0)</h2>
+                <div id="islands-risk">Chargement...</div>
+            </div>
+        </div>
+
+        <div class="row">
+            <div class="section">
+                <h2>Top plages abonnées</h2>
+                <div id="top-beaches">Aucun abonnement encore.</div>
+            </div>
+
+            <div class="section">
+                <h2>Historique alertes (30 jours)</h2>
+                <div class="timeline" id="timeline"></div>
+                <p style="text-align:center;color:#6c7a99;font-size:0.75em;margin-top:8px">
+                    Une barre = un jour. Hauteur = nombre d'alertes envoyées.
+                </p>
+            </div>
+        </div>
+
+        <footer>
+            Données mises à jour toutes les 6 heures · Sources : AVISO+, Copernicus Marine, NOAA, OpenDrift<br>
+            Bot Telegram : <a href="https://t.me/Sargasum_alerte_bot" target="_blank">@Sargasum_alerte_bot</a>
+        </footer>
+    </div>
+
+    <script>
+        function fmt(n) { return n == null ? '—' : Number(n).toLocaleString('fr-FR'); }
+        function fmtDate(iso) {
+            if (!iso) return '—';
+            const d = new Date(iso);
+            return d.toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+        }
+
+        async function load() {
+            const res = await fetch('/api/stats');
+            const d = await res.json();
+
+            // Counters
+            document.getElementById('c-users').textContent = fmt(d.counters.unique_users);
+            document.getElementById('c-subs-detail').textContent = `${fmt(d.counters.subscriptions)} abonnement${d.counters.subscriptions > 1 ? 's' : ''}`;
+            document.getElementById('c-alerts').textContent = fmt(d.counters.alerts_total);
+            document.getElementById('c-alerts-7d').textContent = `${fmt(d.counters.alerts_7d)} sur 7 derniers jours`;
+            document.getElementById('c-drift').textContent = fmt(d.counters.drift_simulations);
+            document.getElementById('c-beaches').textContent = fmt(d.counters.active_beaches);
+            document.getElementById('c-obs').textContent = fmt(d.counters.observations);
+
+            // Timestamps
+            document.getElementById('t-collect').textContent = fmtDate(d.timestamps.last_collect);
+            document.getElementById('t-scoring').textContent = fmtDate(d.timestamps.last_scoring);
+            document.getElementById('t-alert').textContent = fmtDate(d.timestamps.last_alert);
+
+            // Islands risk
+            const colors = { none: '#22c55e', low: '#eab308', medium: '#f97316', high: '#ef4444' };
+            const labels = { none: 'Aucun', low: 'Faible', medium: 'Moyen', high: 'Fort' };
+            const byIsland = {};
+            d.risk_distribution.forEach(r => {
+                byIsland[r.island] = byIsland[r.island] || { none: 0, low: 0, medium: 0, high: 0 };
+                byIsland[r.island][r.level] = r.count;
+            });
+            const islandsHtml = Object.entries(byIsland).map(([island, levels]) => `
+                <div class="island-row">
+                    <div class="name">${island}</div>
+                    <div class="risk-grid">
+                        ${['none', 'low', 'medium', 'high'].map(l =>
+                            `<div class="risk-cell" style="--c:${colors[l]}">
+                                <div class="num">${levels[l] || 0}</div>
+                                <div class="lbl">${labels[l]}</div>
+                            </div>`).join('')}
+                    </div>
+                </div>
+            `).join('');
+            document.getElementById('islands-risk').innerHTML = islandsHtml || 'Aucune donnée';
+
+            // Top beaches
+            if (d.top_beaches_subscribed.length > 0) {
+                const max = d.top_beaches_subscribed[0].count;
+                const topHtml = d.top_beaches_subscribed.map(b => `
+                    <div class="bar-item">
+                        <div class="bar-label"><span>${b.beach.replace(/_/g, ' ')}</span><strong>${b.count}</strong></div>
+                        <div class="bar-track"><div class="bar-fill" style="width:${(b.count / max * 100)}%"></div></div>
+                    </div>
+                `).join('');
+                document.getElementById('top-beaches').innerHTML = topHtml;
+            }
+
+            // Timeline 30 jours
+            const days = [];
+            const today = new Date();
+            for (let i = 29; i >= 0; i--) {
+                const d2 = new Date(today);
+                d2.setDate(d2.getDate() - i);
+                days.push(d2.toISOString().slice(0, 10));
+            }
+            const counts = {};
+            d.alerts_history_30d.forEach(r => counts[r.day] = r.count);
+            const maxAlerts = Math.max(1, ...Object.values(counts), 1);
+            const timelineHtml = days.map(day => {
+                const c = counts[day] || 0;
+                const h = (c / maxAlerts) * 100;
+                return `<div class="timeline-bar" style="height:${h}%" data-tooltip="${day} : ${c} alerte${c > 1 ? 's' : ''}"></div>`;
+            }).join('');
+            document.getElementById('timeline').innerHTML = timelineHtml;
+        }
+
+        load();
+        setInterval(load, 5 * 60 * 1000);
+    </script>
+</body>
+</html>

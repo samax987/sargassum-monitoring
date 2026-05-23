@@ -154,8 +154,13 @@
             <div class="hint">Glisse le marker sur la carte pour ajuster</div>
         </div>
         <div class="field">
-            <label>Rayon de capture (km)</label>
-            <input type="number" step="0.1" id="ed-radius" value="2.0">
+            <label>Zone de capture (km)</label>
+            <input type="number" step="0.5" id="ed-radius" value="2.0" min="1" max="5">
+            <div class="hint" style="line-height:1.5">
+                Ce n'est <strong>pas la taille de la plage</strong> mais le rayon de la zone où on suit les sargasses qui risquent d'y arriver.<br>
+                <strong>Recommandé :</strong> 1.5 km (anse étroite) · 2 km (plage moyenne) · 3 km (grande plage) · 4 km (grande baie)<br>
+                <span style="color:#f97316">⚠ Minimum 1 km</span> (résolution satellite)
+            </div>
         </div>
         <div class="field">
             <label>

@@ -189,21 +189,20 @@
         let editingMarker = null; // L.Marker drag
 
         // ── Chargement liste ────────────────────────────────────────────────
+        // Helper fetch avec credentials (le navigateur reutilise le Basic Auth en cache)
+        function authFetch(url, opts = {}) {
+            return fetch(url, { ...opts, credentials: 'same-origin' });
+        }
+
         async function loadBeaches() {
-            const auth = btoa('sam:' + getPassword());
-            const res = await fetch('/admin/api/beaches', { headers: { 'Authorization': 'Basic ' + auth } });
-            if (!res.ok) { alert('Authentification echouee'); location.reload(); return; }
+            const res = await authFetch('/admin/api/beaches');
+            if (!res.ok) { alert('Authentification echouee (HTTP ' + res.status + ')'); return; }
             const data = await res.json();
             beaches = data.beaches;
             document.getElementById('beach-count').textContent = beaches.length;
             populateIslandFilter();
             renderList();
             renderMapMarkers();
-        }
-
-        function getPassword() {
-            // Le navigateur garde l'auth basic en cache une fois saisie
-            return '';
         }
 
         function populateIslandFilter() {
@@ -333,7 +332,7 @@
                 ? `/admin/api/beaches/${editingBeach.id}`
                 : '/admin/api/beaches';
             const method = editingBeach.id ? 'PUT' : 'POST';
-            const res = await fetch(url, {
+            const res = await authFetch(url, {
                 method,
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(data),
@@ -351,7 +350,7 @@
         async function deleteBeach() {
             if (!editingBeach || !editingBeach.id) return;
             if (!confirm(`Desactiver "${editingBeach.name.replace(/_/g, ' ')}" ?`)) return;
-            const res = await fetch(`/admin/api/beaches/${editingBeach.id}/delete`, { method: 'POST' });
+            const res = await authFetch(`/admin/api/beaches/${editingBeach.id}/delete`, { method: 'POST' });
             if (res.ok) {
                 showToast('Desactivee ✓');
                 closeEditor();

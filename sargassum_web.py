@@ -121,19 +121,28 @@ def api_beaches():
 
 @app.route('/api/status')
 def api_status():
-    """Risques actuels par plage (dernier scoring, J+0 a J+5)."""
+    """Risques actuels par plage (dernier scoring, J+0 a J+5).
+
+    Joint avec beaches_config pour utiliser les coords ACTUELLES (admin)
+    et non celles figees au moment du scoring (qui peuvent etre obsoletes).
+    """
     conn = get_db()
     cur = conn.execute("""
-        SELECT beach_name, beach_lat, beach_lon, day_offset, risk_level,
-               ROUND(regional_score, 1) AS regional_score,
-               ROUND(closest_km, 1) AS closest_km,
-               computed_at
-        FROM beach_risk_scores
-        WHERE island = ?
-          AND computed_at = (
+        SELECT s.beach_name,
+               COALESCE(bc.lat, s.beach_lat) AS beach_lat,
+               COALESCE(bc.lon, s.beach_lon) AS beach_lon,
+               s.day_offset, s.risk_level,
+               ROUND(s.regional_score, 1) AS regional_score,
+               ROUND(s.closest_km, 1) AS closest_km,
+               s.computed_at
+        FROM beach_risk_scores s
+        LEFT JOIN beaches_config bc
+            ON bc.island = s.island AND bc.name = s.beach_name AND bc.active = 1
+        WHERE s.island = ?
+          AND s.computed_at = (
               SELECT MAX(computed_at) FROM beach_risk_scores WHERE island = ?
           )
-        ORDER BY beach_name, day_offset
+        ORDER BY s.beach_name, s.day_offset
     """, (ISLAND, ISLAND))
 
     # Regroupe par plage

@@ -187,6 +187,7 @@
         let markers = {};   // id → L.Marker
         let editingBeach = null;  // beach object en cours d'edition
         let editingMarker = null; // L.Marker drag
+        let editingCircle = null; // L.Circle du rayon de capture
 
         // ── Chargement liste ────────────────────────────────────────────────
         // Helper fetch avec credentials (le navigateur reutilise le Basic Auth en cache)
@@ -286,8 +287,21 @@
 
         function setupDraggableEditMarker(beach) {
             if (editingMarker) map.removeLayer(editingMarker);
+            if (editingCircle) map.removeLayer(editingCircle);
             const lat = parseFloat(beach.lat) || 17.9;
             const lon = parseFloat(beach.lon) || -62.83;
+            const radiusKm = parseFloat(beach.radius_km) || 2.0;
+
+            // Cercle de rayon de capture (en metres pour Leaflet)
+            editingCircle = L.circle([lat, lon], {
+                radius: radiusKm * 1000,
+                color: '#22c55e',
+                weight: 2,
+                opacity: 0.8,
+                fillColor: '#22c55e',
+                fillOpacity: 0.08,
+                dashArray: '6, 6',
+            }).addTo(map);
 
             const icon = L.divIcon({
                 html: '<div class="admin-marker active"></div>',
@@ -300,7 +314,16 @@
                 const { lat, lng } = e.target.getLatLng();
                 document.getElementById('ed-lat').value = lat.toFixed(5);
                 document.getElementById('ed-lon').value = lng.toFixed(5);
+                // Le cercle suit le marker
+                if (editingCircle) editingCircle.setLatLng([lat, lng]);
             });
+
+            // Mise a jour du cercle quand on change le rayon dans le form
+            const radiusInput = document.getElementById('ed-radius');
+            radiusInput.oninput = () => {
+                const r = parseFloat(radiusInput.value) || 0;
+                if (editingCircle) editingCircle.setRadius(r * 1000);
+            };
         }
 
         function newBeach() {
@@ -310,6 +333,7 @@
         function closeEditor() {
             document.getElementById('editor').classList.remove('visible');
             if (editingMarker) { map.removeLayer(editingMarker); editingMarker = null; }
+            if (editingCircle) { map.removeLayer(editingCircle); editingCircle = null; }
             editingBeach = null;
             document.querySelectorAll('.beach-row').forEach(r => r.classList.remove('active'));
         }

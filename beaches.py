@@ -122,6 +122,31 @@ BEACHES = [
     {"island": "Marie-Galante", "name": "Anse_Canot",   "lat": 15.9683, "lon": -61.2733, "radius_km": 2.0},
 ]
 
+# ── Override BEACHES depuis la DB (table beaches_config) ──────────────────────
+# Si la table existe et n'est pas vide, on charge les plages depuis la DB
+# au lieu de la liste hardcodee ci-dessus. La liste reste en fallback.
+try:
+    import beaches_db as _beaches_db
+    if not _beaches_db.is_table_empty():
+        _db_beaches = _beaches_db.list_all(only_active=True)
+        if _db_beaches:
+            # Garde le format attendu par le code (island, name, lat, lon, radius_km)
+            BEACHES = [
+                {
+                    'island':    b['island'],
+                    'name':      b['name'],
+                    'lat':       b['lat'],
+                    'lon':       b['lon'],
+                    'radius_km': b['radius_km'],
+                }
+                for b in _db_beaches
+            ]
+except Exception as _e:
+    # En cas d'erreur (table absente, etc.), garde la liste hardcodee
+    import sys
+    print(f'  [WARN] Fallback liste hardcodee : {_e}', file=sys.stderr)
+
+
 
 # ── Géographie ────────────────────────────────────────────────────────────────
 

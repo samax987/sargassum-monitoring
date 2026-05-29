@@ -114,6 +114,7 @@ CREATE TABLE IF NOT EXISTS drift_predictions (
     n_particles      INTEGER,           -- nb de particules semées
     current_source   TEXT,              -- ex: 'DUACS+Copernicus'
     day_offset       INTEGER,           -- 0=position initiale, 1=+1j, …, 5=+5j
+    hour_offset      INTEGER,           -- heures depuis t0 (0,3,…,120) ; jour = hour_offset//24
     lon_min          REAL,
     lon_max          REAL,
     lat_min          REAL,
@@ -208,6 +209,11 @@ CREATE TABLE IF NOT EXISTS webcam_captures (
 def get_conn(path: Path = DB_PATH) -> sqlite3.Connection:
     conn = sqlite3.connect(path)
     conn.executescript(SCHEMA)
+    # Migration idempotente : colonne hour_offset (résolution 3h) sur bases existantes
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(drift_predictions)")}
+    if "hour_offset" not in cols:
+        conn.execute("ALTER TABLE drift_predictions ADD COLUMN hour_offset INTEGER")
+        conn.commit()
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -1024,18 +1030,32 @@ def simulate_drift(conn: sqlite3.Connection) -> bool:
             outfile   = str(sim_out),
         )
 
-        # ── 4. Extraction et stockage des snapshots journaliers ───────────────
+        # ── 4. Extraction et stockage des snapshots toutes les 3h ─────────────
+        # OpenDrift calcule un pas toutes les 3h (time_step=3h) sur 5 jours
+        # → 41 indices temporels (0,3,…,120h). On stocke chacun ; day_offset
+        # reste = hour_offset//24 pour la compatibilité des vues journalières
+        # (snapshot journalier = hour_offset % 24 == 0).
         sim_ds = xr.open_dataset(sim_out)
         times  = sim_ds["time"].values
-        # time_step=3h → 8 indices par jour
-        steps_per_day = 8
+        n_times = len(times)
 
         simulated_at = now_utc()
         sim_start_str = sim_start_naive.strftime("%Y-%m-%dT%H:%M:%S")
         sim_end_str   = (sim_start_naive + timedelta(days=5)).strftime("%Y-%m-%dT%H:%M:%S")
 
-        for day in range(6):    # j+0 à j+5
-            t_idx = min(day * steps_per_day, len(times) - 1)
+        current_source = "DUACS+Copernicus"
+        if wind_run:
+            current_source += "+GFS_wind1pct"
+        if stokes_ok:
+            current_source += "+Stokes"
+
+        rows_drift = []
+        n_daily = 0
+        for t_idx in range(n_times):
+            hour_offset = t_idx * 3
+            day_offset  = hour_offset // 24
+            if hour_offset % 24 == 0:
+                n_daily += 1
             lo_t  = sim_ds["lon"].isel(time=t_idx).values
             la_t  = sim_ds["lat"].isel(time=t_idx).values
             active = ~np.isnan(lo_t)
@@ -1053,44 +1073,51 @@ def simulate_drift(conn: sqlite3.Connection) -> bool:
                 for lo, la in zip(lo_act, la_act)
             ]
 
-            current_source = "DUACS+Copernicus"
-            if wind_run:
-                current_source += "+GFS_wind1pct"
-            if stokes_ok:
-                current_source += "+Stokes"
+            rows_drift.append((
+                simulated_at, sim_start_str, sim_end_str,
+                n_particles,
+                current_source,
+                day_offset,
+                hour_offset,
+                round(float(np.nanmin(lo_act)), 3) if n_act else None,
+                round(float(np.nanmax(lo_act)), 3) if n_act else None,
+                round(float(np.nanmin(la_act)), 3) if n_act else None,
+                round(float(np.nanmax(la_act)), 3) if n_act else None,
+                round(act_frac, 4),
+                json.dumps(positions),
+                json.dumps({
+                    "day": day_offset,
+                    "hour": hour_offset,
+                    "n_active": n_act,
+                    "afai_date": afai_date,
+                    "wind_run": wind_run,
+                    "wind_drift_factor": 0.01 if wind_run else 0.0,
+                    "stokes_drift": stokes_ok,
+                }),
+            ))
 
-            conn.execute(
-                """INSERT INTO drift_predictions
-                   (simulated_at, sim_start, sim_end, n_particles, current_source,
-                    day_offset, lon_min, lon_max, lat_min, lat_max,
-                    active_fraction, positions_json, raw_metadata)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                (
-                    simulated_at, sim_start_str, sim_end_str,
-                    n_particles,
-                    current_source,
-                    day,
-                    round(float(np.nanmin(lo_act)), 3) if n_act else None,
-                    round(float(np.nanmax(lo_act)), 3) if n_act else None,
-                    round(float(np.nanmin(la_act)), 3) if n_act else None,
-                    round(float(np.nanmax(la_act)), 3) if n_act else None,
-                    round(act_frac, 4),
-                    json.dumps(positions),
-                    json.dumps({
-                        "day": day,
-                        "n_active": n_act,
-                        "afai_date": afai_date,
-                        "wind_run": wind_run,
-                        "wind_drift_factor": 0.01 if wind_run else 0.0,
-                        "stokes_drift": stokes_ok,
-                    }),
-                ),
+        conn.executemany(
+            """INSERT INTO drift_predictions
+               (simulated_at, sim_start, sim_end, n_particles, current_source,
+                day_offset, hour_offset, lon_min, lon_max, lat_min, lat_max,
+                active_fraction, positions_json, raw_metadata)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            rows_drift,
+        )
+        # Purge : conserver les 90 dernières simulations (≈ 3 sem. à 4/j).
+        # Chaque sim = 41 lignes 3h ; sans purge la table grossit ~7× plus vite.
+        conn.execute("""
+            DELETE FROM drift_predictions
+            WHERE simulated_at NOT IN (
+                SELECT DISTINCT simulated_at FROM drift_predictions
+                ORDER BY simulated_at DESC LIMIT 90
             )
-            conn.commit()
+        """)
+        conn.commit()
 
         sim_ds.close()
         print(f"  ✅ DRIFT SIM       | t0={sim_start_str} | particules={n_particles} "
-              f"| 6 snapshots (j+0…j+5) stockés")
+              f"| {len(rows_drift)} snapshots 3h ({n_daily} journaliers j+0…j+5) stockés")
 
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)

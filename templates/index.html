@@ -454,6 +454,17 @@
             </div>
 
             <div class="section">
+                <h2>Heure d'arrivée prévue · 48h</h2>
+                <div id="timeline-list" class="loading">
+                    <div class="skeleton" style="height:48px;margin-bottom:8px;"></div>
+                    <div class="skeleton" style="height:48px;"></div>
+                </div>
+                <div style="font-size:11px;color:#9ca3af;margin-top:6px;">
+                    Résolution 3h · 1er passage au risque ≥ moyen
+                </div>
+            </div>
+
+            <div class="section">
                 <h2>Alertes Telegram</h2>
                 <div class="subscribe-box">
                     <select id="subscribe-beach">
@@ -766,11 +777,74 @@
             resultDiv.innerHTML = `<a href="${data.telegram_link}" target="_blank">→ Ouvrir Telegram et m'abonner à ${beach.replace(/_/g, ' ')}</a>`;
         }
 
+        // === Timeline horaire (résolution 3h) ===
+        function formatArrival(beach) {
+            if (beach.arrival_hour === null || beach.arrival_hour === undefined) {
+                return { text: 'Aucun risque ≥ moyen sur 48h', cls: 'none' };
+            }
+            const h = beach.arrival_hour;
+            const dayLabel = h < 24 ? "aujourd'hui" : (h < 48 ? 'demain' : `J+${Math.floor(h / 24)}`);
+            let hourLabel = '';
+            if (beach.arrival_time) {
+                // valid_time est en UTC ISO ; afficher l'heure locale SBH (UTC-4)
+                const d = new Date(beach.arrival_time);
+                const local = new Date(d.getTime() - 4 * 3600 * 1000);
+                hourLabel = ` ${String(local.getUTCHours()).padStart(2, '0')}h`;
+            }
+            return { text: `${dayLabel}${hourLabel} (≈ +${h}h)`, cls: 'risk' };
+        }
+
+        async function loadTimeline() {
+            try {
+                const res = await fetch('/api/timeline?hours=48');
+                if (!res.ok) return;
+                const data = await res.json();
+                renderTimeline(data.beaches || []);
+            } catch (e) { console.error('timeline:', e); }
+        }
+
+        function renderTimeline(beaches) {
+            const container = document.getElementById('timeline-list');
+            container.className = '';
+            if (!beaches.length) {
+                container.innerHTML = '<div style="color:#9ca3af;padding:10px">Timeline indisponible (prochaine simulation).</div>';
+                return;
+            }
+            // Plages avec une arrivée d'abord, triées par heure d'arrivée croissante
+            beaches.sort((a, b) => {
+                const ha = a.arrival_hour === null ? 9999 : a.arrival_hour;
+                const hb = b.arrival_hour === null ? 9999 : b.arrival_hour;
+                return ha - hb;
+            });
+            container.innerHTML = '';
+            beaches.forEach(beach => {
+                const arr = formatArrival(beach);
+                const incoming = beach.series.find(s => s.hour_offset === beach.arrival_hour);
+                const color = incoming ? incoming.color : '#22c55e';
+                const row = document.createElement('div');
+                row.className = 'beach';
+                row.style.setProperty('--risk-color', color);
+                row.style.cursor = 'pointer';
+                row.onclick = () => map.flyTo([beach.lat, beach.lon], 16, { duration: 0.8 });
+                row.innerHTML = `
+                    <div class="beach-header">
+                        <div class="beach-name">${beach.name.replace(/_/g, ' ')}</div>
+                        <span class="beach-pill" style="background:${color}">
+                            ${arr.cls === 'none' ? '—' : '⚠'}
+                        </span>
+                    </div>
+                    <div style="font-size:12px;color:#cbd5e1;margin-top:2px;">${arr.text}</div>
+                `;
+                container.appendChild(row);
+            });
+        }
+
         // === Init ===
         loadStatus();
         loadHealth();
         loadWeather();
-        setInterval(() => { loadStatus(); loadHealth(); }, 5 * 60 * 1000);
+        loadTimeline();
+        setInterval(() => { loadStatus(); loadHealth(); loadTimeline(); }, 5 * 60 * 1000);
         setInterval(loadWeather, 15 * 60 * 1000);
     </script>
 </body>

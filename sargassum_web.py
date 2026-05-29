@@ -193,26 +193,47 @@ def api_forecast():
 
 @app.route('/api/drift')
 def api_drift():
-    """Positions des particules OpenDrift (dernier sim, par day_offset)."""
-    day_offset = request.args.get('day', '0')
-    try:
-        day_offset = int(day_offset)
-    except ValueError:
-        day_offset = 0
+    """Positions des particules OpenDrift (dernier sim).
 
+    ?day=N   → snapshot journalier j+N (par défaut, rétrocompatible)
+    ?hour=H  → snapshot à H heures depuis t0 (résolution 3h : 0,3,…,120)
+    """
     conn = get_db()
-    cur = conn.execute("""
-        SELECT positions_json, n_particles, active_fraction, simulated_at,
-               sim_start, current_source
-        FROM drift_predictions
-        WHERE day_offset = ?
-        ORDER BY id DESC LIMIT 1
-    """, (day_offset,))
+
+    hour_arg = request.args.get('hour')
+    if hour_arg is not None:
+        try:
+            hour_offset = int(hour_arg)
+        except ValueError:
+            hour_offset = 0
+        cur = conn.execute("""
+            SELECT positions_json, n_particles, active_fraction, simulated_at,
+                   sim_start, current_source, day_offset, hour_offset
+            FROM drift_predictions
+            WHERE hour_offset = ?
+            ORDER BY id DESC LIMIT 1
+        """, (hour_offset,))
+    else:
+        try:
+            day_offset = int(request.args.get('day', '0'))
+        except ValueError:
+            day_offset = 0
+        # Snapshot journalier = bord de journée (hour_offset % 24 == 0).
+        # hour_offset IS NULL = sim antérieures à la résolution 3h.
+        cur = conn.execute("""
+            SELECT positions_json, n_particles, active_fraction, simulated_at,
+                   sim_start, current_source, day_offset, hour_offset
+            FROM drift_predictions
+            WHERE day_offset = ?
+              AND (hour_offset IS NULL OR hour_offset % 24 = 0)
+            ORDER BY id DESC LIMIT 1
+        """, (day_offset,))
+
     row = cur.fetchone()
     conn.close()
 
     if not row:
-        return jsonify({'error': 'No drift data', 'day_offset': day_offset}), 404
+        return jsonify({'error': 'No drift data'}), 404
 
     try:
         positions = json.loads(row['positions_json'])
@@ -220,13 +241,94 @@ def api_drift():
         positions = []
 
     return jsonify({
-        'day_offset': day_offset,
+        'day_offset': row['day_offset'],
+        'hour_offset': row['hour_offset'],
         'simulated_at': row['simulated_at'],
         'sim_start': row['sim_start'],
         'source': row['current_source'],
         'n_particles': row['n_particles'],
         'active_fraction': row['active_fraction'],
         'positions': positions,
+    })
+
+
+@app.route('/api/timeline')
+def api_timeline():
+    """Timeline horaire (résolution 3h) du risque par plage — dernier run.
+
+    Sans paramètre : toutes les plages SBH avec leur série 3h et l'heure
+    d'arrivée prévue (1er pas où risk_level >= medium).
+    ?beach=Nom  → restreint à une plage.
+    ?hours=N    → horizon en heures (défaut 48).
+    """
+    try:
+        horizon = int(request.args.get('hours', '48'))
+    except ValueError:
+        horizon = 48
+    beach_filter = request.args.get('beach')
+
+    conn = get_db()
+    last = conn.execute(
+        "SELECT MAX(computed_at) AS c FROM beach_timeline WHERE island = ?",
+        (ISLAND,),
+    ).fetchone()
+    if not last or not last['c']:
+        conn.close()
+        return jsonify({'island': ISLAND, 'computed_at': None, 'beaches': []})
+    computed_at = last['c']
+
+    params = [ISLAND, computed_at, horizon]
+    beach_clause = ""
+    if beach_filter:
+        beach_clause = " AND beach_name = ?"
+        params.append(beach_filter)
+
+    rows = conn.execute(f"""
+        SELECT beach_name, beach_lat, beach_lon, hour_offset, day_offset,
+               valid_time, risk_level,
+               ROUND(regional_score, 1) AS regional_score,
+               ROUND(closest_km, 1) AS closest_km
+        FROM beach_timeline
+        WHERE island = ? AND computed_at = ? AND hour_offset <= ?{beach_clause}
+        ORDER BY beach_name, hour_offset
+    """, params).fetchall()
+    conn.close()
+
+    rank = {'none': 0, 'low': 1, 'medium': 2, 'high': 3}
+    beaches = {}
+    for r in rows:
+        name = r['beach_name']
+        b = beaches.get(name)
+        if b is None:
+            b = beaches[name] = {
+                'name': name,
+                'lat': r['beach_lat'],
+                'lon': r['beach_lon'],
+                'computed_at': computed_at,
+                'arrival_hour': None,
+                'arrival_time': None,
+                'series': [],
+            }
+        b['series'].append({
+            'hour_offset': r['hour_offset'],
+            'day_offset': r['day_offset'],
+            'valid_time': r['valid_time'],
+            'risk_level': r['risk_level'],
+            'color': risk_to_color(r['risk_level']),
+            'label': risk_to_fr(r['risk_level']),
+            'regional_score': r['regional_score'],
+            'closest_km': r['closest_km'],
+        })
+        if b['arrival_hour'] is None and rank.get(r['risk_level'], 0) >= 2:
+            b['arrival_hour'] = r['hour_offset']
+            b['arrival_time'] = r['valid_time']
+
+    return jsonify({
+        'island': ISLAND,
+        'computed_at': computed_at,
+        'horizon_hours': horizon,
+        'count': len(beaches),
+        'beaches': list(beaches.values()),
     })
 
 

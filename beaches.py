@@ -272,6 +272,43 @@ def risk_label(regional_score: float) -> str:
     return "none"
 
 
+def _score_all_beaches(
+    positions: list,
+    n_active: int,
+    n_sample: int,
+    biases: dict,
+    pred_month: int,
+    day_offset: int,
+):
+    """Score toutes les plages pour un snapshot donné, biais appliqué par île.
+
+    Retourne [(beach_dict, island, score_dict), …]. Mutualisé entre le scoring
+    journalier (beach_risk_scores) et la timeline 3h (beach_timeline)."""
+    ratio = n_active / n_sample if n_sample > 0 else 0.0
+    corrected_cache: dict[str, list] = {}
+    out = []
+    for beach in BEACHES:
+        island = beach.get("island", "")
+        bias = _bias_for(biases, island, pred_month, day_offset) if biases else None
+        if bias and positions:
+            if island not in corrected_cache:
+                dlat_km, dlon_km = bias
+                deg_lat_per_km, deg_lon_per_km = _deg_per_km_at(beach["lat"])
+                shift_lon = -dlon_km * deg_lon_per_km
+                shift_lat = -dlat_km * deg_lat_per_km
+                corrected_cache[island] = [
+                    [pt[0] + shift_lon, pt[1] + shift_lat]
+                    for pt in positions if len(pt) >= 2
+                ]
+            positions_to_use = corrected_cache[island]
+        else:
+            positions_to_use = positions
+        s = _score_beach(positions_to_use, beach["lat"], beach["lon"],
+                         beach["radius_km"], ratio)
+        out.append((beach, island, s))
+    return out
+
+
 # ── Base de données ───────────────────────────────────────────────────────────
 
 _SCHEMA = """
@@ -307,9 +344,37 @@ _NEW_COLUMNS = [
 ]
 
 
+_TIMELINE_SCHEMA = """
+CREATE TABLE IF NOT EXISTS beach_timeline (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    computed_at    TEXT    NOT NULL,
+    simulated_at   TEXT    NOT NULL,
+    island         TEXT,
+    beach_name     TEXT    NOT NULL,
+    beach_lat      REAL    NOT NULL,
+    beach_lon      REAL    NOT NULL,
+    radius_km      REAL,
+    hour_offset    INTEGER NOT NULL,   -- heures depuis t0 (0,3,…,120)
+    day_offset     INTEGER NOT NULL,   -- hour_offset // 24
+    valid_time     TEXT,               -- t0 + hour_offset (UTC ISO)
+    est_count      REAL,
+    local_score    REAL,
+    regional_score REAL,
+    closest_km     REAL,
+    risk_level     TEXT    NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_timeline_lookup
+    ON beach_timeline (island, beach_name, computed_at, hour_offset);
+"""
+
+# Nb de runs (computed_at) de timeline conservés (41 pas × ~58 plages / run)
+TIMELINE_KEEP_RUNS = 30
+
+
 def _get_conn(db_path: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path)
     conn.executescript(_SCHEMA)
+    conn.executescript(_TIMELINE_SCHEMA)
     existing = {row[1] for row in conn.execute("PRAGMA table_info(beach_risk_scores)")}
     for col, typedef in _NEW_COLUMNS:
         if col not in existing:
@@ -335,10 +400,13 @@ def compute_beach_scores(db_path: Path = DB_PATH) -> int:
     simulated_at = row["max_sim"]
 
     placeholders = ",".join("?" * len(DAY_OFFSETS))
+    # Scoring journalier : ne prendre que les snapshots de bord de journée
+    # (hour_offset % 24 == 0). hour_offset IS NULL = anciennes sim avant la 3h.
     snaps = conn.execute(
         f"""SELECT day_offset, positions_json, n_particles, active_fraction
             FROM drift_predictions
             WHERE simulated_at = ? AND day_offset IN ({placeholders})
+              AND (hour_offset IS NULL OR hour_offset % 24 = 0)
             ORDER BY day_offset""",
         (simulated_at, *DAY_OFFSETS),
     ).fetchall()
@@ -433,6 +501,104 @@ def compute_beach_scores(db_path: Path = DB_PATH) -> int:
             ORDER BY computed_at DESC LIMIT 60
         )
     """)
+    conn.commit()
+
+    conn.close()
+    return len(rows_to_insert)
+
+
+def compute_beach_timeline(db_path: Path = DB_PATH) -> int:
+    """Scoring fin (toutes les 3h) → table beach_timeline.
+
+    Lit TOUS les snapshots de la dernière simulation (hour_offset 0,3,…,120)
+    et calcule le risque par plage à chaque pas, pour alimenter la timeline
+    horaire du site ("heure d'arrivée prévue par plage"). N'altère pas
+    beach_risk_scores (chemin journalier des alertes/calibration)."""
+    conn = _get_conn(db_path)
+
+    row = conn.execute(
+        "SELECT MAX(simulated_at) AS max_sim FROM drift_predictions"
+    ).fetchone()
+    if not row or not row["max_sim"]:
+        conn.close()
+        return 0
+    simulated_at = row["max_sim"]
+
+    snaps = conn.execute(
+        """SELECT hour_offset, day_offset, sim_start, positions_json,
+                  n_particles, active_fraction
+           FROM drift_predictions
+           WHERE simulated_at = ? AND hour_offset IS NOT NULL
+           ORDER BY hour_offset""",
+        (simulated_at,),
+    ).fetchall()
+
+    if not snaps:
+        # Aucune sim 3h disponible (base antérieure à la migration) — pas d'erreur.
+        conn.close()
+        return 0
+
+    computed_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    biases = _load_latest_biases(conn) if APPLY_BIAS_CORRECTION else {}
+    sim_dt = datetime.fromisoformat(simulated_at.replace("Z", "+00:00"))
+
+    rows_to_insert = []
+    for snap in snaps:
+        hour        = snap["hour_offset"]
+        day         = snap["day_offset"] if snap["day_offset"] is not None else hour // 24
+        n_particles = snap["n_particles"] or 0
+        act_frac    = snap["active_fraction"] or 0.0
+        n_active    = int(round(n_particles * act_frac))
+
+        try:
+            positions = json.loads(snap["positions_json"] or "[]")
+        except (json.JSONDecodeError, TypeError):
+            positions = []
+        n_sample = len(positions)
+
+        pred_month = (sim_dt + timedelta(hours=hour)).month
+
+        # valid_time = t0 (sim_start) + hour_offset
+        valid_time = None
+        if snap["sim_start"]:
+            try:
+                t0 = datetime.fromisoformat(snap["sim_start"].replace("Z", "+00:00"))
+                if t0.tzinfo is None:
+                    t0 = t0.replace(tzinfo=timezone.utc)
+                valid_time = (t0 + timedelta(hours=hour)).strftime("%Y-%m-%dT%H:%M:%SZ")
+            except ValueError:
+                valid_time = None
+
+        for beach, island, s in _score_all_beaches(
+            positions, n_active, n_sample, biases, pred_month, day
+        ):
+            rows_to_insert.append((
+                computed_at, simulated_at, island,
+                beach["name"], beach["lat"], beach["lon"], beach["radius_km"],
+                hour, day, valid_time,
+                s["est_count"], s["local_score"], s["regional_score"],
+                s["closest_km"], risk_label(s["regional_score"]),
+            ))
+
+    conn.executemany(
+        """INSERT INTO beach_timeline
+           (computed_at, simulated_at, island, beach_name, beach_lat, beach_lon,
+            radius_km, hour_offset, day_offset, valid_time,
+            est_count, local_score, regional_score, closest_km, risk_level)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        rows_to_insert,
+    )
+    conn.commit()
+
+    # Purge : conserver les TIMELINE_KEEP_RUNS derniers computed_at
+    conn.execute(
+        """DELETE FROM beach_timeline
+           WHERE computed_at NOT IN (
+               SELECT DISTINCT computed_at FROM beach_timeline
+               ORDER BY computed_at DESC LIMIT ?
+           )""",
+        (TIMELINE_KEEP_RUNS,),
+    )
     conn.commit()
 
     conn.close()
@@ -540,6 +706,9 @@ if __name__ == "__main__":
     n = compute_beach_scores(db)
     if n > 0:
         print(f"  ✅ {n} scores insérés dans beach_risk_scores")
+        nt = compute_beach_timeline(db)
+        if nt > 0:
+            print(f"  ✅ {nt} scores 3h insérés dans beach_timeline (timeline horaire)")
         print_report(db)
     else:
         print("  Aucun score inséré.")

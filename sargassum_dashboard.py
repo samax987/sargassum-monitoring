@@ -194,9 +194,12 @@ def load_drift(db_path: str) -> pd.DataFrame:
             conn.close()
             return pd.DataFrame()
         max_sim = row["max_sim"]
+        # Vue journalière : ne garder que les snapshots de bord de journée
+        # (hour_offset % 24 == 0) ; hour_offset IS NULL = sim pré-résolution 3h.
         df = pd.read_sql_query(
             """SELECT * FROM drift_predictions
                WHERE simulated_at = ?
+                 AND (hour_offset IS NULL OR hour_offset % 24 = 0)
                ORDER BY day_offset ASC""",
             conn,
             params=(max_sim,),

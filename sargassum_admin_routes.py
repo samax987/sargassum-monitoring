@@ -152,7 +152,7 @@ def register_admin_routes(app):
         n_subs = conn.execute("SELECT COUNT(*) FROM telegram_subscriptions").fetchone()[0]
         n_unique_users = conn.execute("SELECT COUNT(DISTINCT chat_id) FROM telegram_subscriptions").fetchone()[0]
         n_alerts_total = conn.execute("SELECT COUNT(*) FROM alert_state WHERE sent_at IS NOT NULL").fetchone()[0]
-        n_drift_sims = conn.execute("SELECT COUNT(*) FROM drift_predictions").fetchone()[0]
+        n_drift_sims = conn.execute("SELECT COUNT(DISTINCT simulated_at) FROM drift_predictions").fetchone()[0]
         n_observations = conn.execute("SELECT COUNT(*) FROM beach_observations").fetchone()[0]
         n_beaches = conn.execute("SELECT COUNT(*) FROM beaches_config WHERE active = 1").fetchone()[0] if conn.execute("SELECT name FROM sqlite_master WHERE name='beaches_config'").fetchone() else 0
 

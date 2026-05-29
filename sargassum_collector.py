@@ -120,7 +120,8 @@ CREATE TABLE IF NOT EXISTS drift_predictions (
     lat_min          REAL,
     lat_max          REAL,
     active_fraction  REAL,              -- fraction de particules encore actives
-    positions_json   TEXT,              -- JSON [[lon,lat], …] (max 500 pts)
+    positions_json   TEXT,              -- JSON [[lon,lat], …] échantillon UNIFORME (scoring plages)
+    positions_viz_json TEXT,            -- JSON [[lon,lat], …] échantillon dense RÉGIONAL (carte only)
     raw_metadata     TEXT
 );
 
@@ -213,6 +214,10 @@ def get_conn(path: Path = DB_PATH) -> sqlite3.Connection:
     cols = {row[1] for row in conn.execute("PRAGMA table_info(drift_predictions)")}
     if "hour_offset" not in cols:
         conn.execute("ALTER TABLE drift_predictions ADD COLUMN hour_offset INTEGER")
+        conn.commit()
+    # Migration idempotente : échantillon dense régional pour la carte
+    if "positions_viz_json" not in cols:
+        conn.execute("ALTER TABLE drift_predictions ADD COLUMN positions_viz_json TEXT")
         conn.commit()
     conn.row_factory = sqlite3.Row
     return conn
@@ -1049,6 +1054,43 @@ def simulate_drift(conn: sqlite3.Connection) -> bool:
         if stokes_ok:
             current_source += "+Stokes"
 
+        # ── Échantillon FIXE de particules, biaisé vers la région SBH ─────────
+        # Avant : 500 pts répartis sur tout le bassin → ~15 seulement près de
+        # SBH, donc traînée/animation invisibles à l'échelle régionale.
+        # Maintenant : on privilégie les particules qui passent par la boîte
+        # Petites Antilles (résidentes ET arrivantes au fil des 5 jours), plus
+        # un échantillon « contexte » du reste du bassin. Le jeu d'indices est
+        # FIXE pour tous les snapshots → l'identité des particules est conservée
+        # d'un pas à l'autre (traînée cohérente côté carte).
+        REG_LON = (-66.0, -59.0)   # boîte un peu plus large que l'affichage
+        REG_LAT = (15.5, 20.5)
+        REG_BUDGET = 450           # particules régionales max
+        CTX_BUDGET = 150           # particules contexte bassin max
+
+        _lon_all = sim_ds["lon"].values
+        _lat_all = sim_ds["lat"].values
+        _taxis   = sim_ds["lon"].dims.index("time")
+        _lon_t   = np.moveaxis(_lon_all, _taxis, 0)   # (n_times, n_traj)
+        _lat_t   = np.moveaxis(_lat_all, _taxis, 0)
+        _in_box = (
+            (_lon_t >= REG_LON[0]) & (_lon_t <= REG_LON[1]) &
+            (_lat_t >= REG_LAT[0]) & (_lat_t <= REG_LAT[1])
+        )
+        _ever   = _in_box.any(axis=0)          # particule passant par la zone à un moment
+        reg_idx = np.where(_ever)[0]
+        if reg_idx.size > REG_BUDGET:
+            reg_idx = reg_idx[np.round(np.linspace(0, reg_idx.size - 1, REG_BUDGET)).astype(int)]
+        ctx_pool = np.where(~_ever)[0]
+        if ctx_pool.size > CTX_BUDGET:
+            ctx_idx = ctx_pool[np.round(np.linspace(0, ctx_pool.size - 1, CTX_BUDGET)).astype(int)]
+        else:
+            ctx_idx = ctx_pool
+        if reg_idx.size or ctx_idx.size:
+            sample_idx = np.unique(np.concatenate([reg_idx, ctx_idx]))
+        else:
+            sample_idx = np.arange(min(n_particles, 600))
+        print(f"    → Échantillon stocké : {reg_idx.size} régionaux + {ctx_idx.size} contexte = {sample_idx.size} pts/snapshot")
+
         rows_drift = []
         n_daily = 0
         for t_idx in range(n_times):
@@ -1059,18 +1101,29 @@ def simulate_drift(conn: sqlite3.Connection) -> bool:
             lo_t  = sim_ds["lon"].isel(time=t_idx).values
             la_t  = sim_ds["lat"].isel(time=t_idx).values
             active = ~np.isnan(lo_t)
-            n_act  = int(active.sum())
+            n_act  = int(active.sum())          # particules actives (tout le bassin)
             act_frac = n_act / n_particles if n_particles > 0 else 0.0
 
-            # Stocker max 500 positions (sous-échantillonner si nécessaire)
-            lo_act, la_act = lo_t[active], la_t[active]
+            # (1) Échantillon UNIFORME (positions_json) — représentatif, sert au
+            #     scoring plages : ratio = n_active/n_sample suppose l'uniformité.
+            lo_u, la_u = lo_t[active], la_t[active]
             if n_act > 500:
                 idx = np.round(np.linspace(0, n_act - 1, 500)).astype(int)
-                lo_act, la_act = lo_act[idx], la_act[idx]
-
+                lo_u, la_u = lo_u[idx], la_u[idx]
             positions = [
                 [round(float(lo), 4), round(float(la), 4)]
-                for lo, la in zip(lo_act, la_act)
+                for lo, la in zip(lo_u, la_u)
+            ]
+
+            # (2) Échantillon dense RÉGIONAL (positions_viz_json) — carte uniquement.
+            #     Jeu d'indices FIXE (identité conservée) ; on retire les inactives.
+            lo_s = lo_t[sample_idx]
+            la_s = la_t[sample_idx]
+            sel_active = ~np.isnan(lo_s)
+            lo_v, la_v = lo_s[sel_active], la_s[sel_active]
+            positions_viz = [
+                [round(float(lo), 4), round(float(la), 4)]
+                for lo, la in zip(lo_v, la_v)
             ]
 
             rows_drift.append((
@@ -1079,16 +1132,19 @@ def simulate_drift(conn: sqlite3.Connection) -> bool:
                 current_source,
                 day_offset,
                 hour_offset,
-                round(float(np.nanmin(lo_act)), 3) if n_act else None,
-                round(float(np.nanmax(lo_act)), 3) if n_act else None,
-                round(float(np.nanmin(la_act)), 3) if n_act else None,
-                round(float(np.nanmax(la_act)), 3) if n_act else None,
+                round(float(np.nanmin(lo_u)), 3) if n_act else None,
+                round(float(np.nanmax(lo_u)), 3) if n_act else None,
+                round(float(np.nanmin(la_u)), 3) if n_act else None,
+                round(float(np.nanmax(la_u)), 3) if n_act else None,
                 round(act_frac, 4),
                 json.dumps(positions),
+                json.dumps(positions_viz),
                 json.dumps({
                     "day": day_offset,
                     "hour": hour_offset,
                     "n_active": n_act,
+                    "n_stored": len(positions),
+                    "n_viz": len(positions_viz),
                     "afai_date": afai_date,
                     "wind_run": wind_run,
                     "wind_drift_factor": 0.01 if wind_run else 0.0,
@@ -1100,8 +1156,8 @@ def simulate_drift(conn: sqlite3.Connection) -> bool:
             """INSERT INTO drift_predictions
                (simulated_at, sim_start, sim_end, n_particles, current_source,
                 day_offset, hour_offset, lon_min, lon_max, lat_min, lat_max,
-                active_fraction, positions_json, raw_metadata)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                active_fraction, positions_json, positions_viz_json, raw_metadata)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             rows_drift,
         )
         # Purge : conserver les 90 dernières simulations (≈ 3 sem. à 4/j).

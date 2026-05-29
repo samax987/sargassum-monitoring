@@ -207,8 +207,8 @@ def api_drift():
         except ValueError:
             hour_offset = 0
         cur = conn.execute("""
-            SELECT positions_json, n_particles, active_fraction, simulated_at,
-                   sim_start, current_source, day_offset, hour_offset
+            SELECT positions_json, positions_viz_json, n_particles, active_fraction,
+                   simulated_at, sim_start, current_source, day_offset, hour_offset
             FROM drift_predictions
             WHERE hour_offset = ?
             ORDER BY id DESC LIMIT 1
@@ -221,8 +221,8 @@ def api_drift():
         # Snapshot journalier = bord de journée (hour_offset % 24 == 0).
         # hour_offset IS NULL = sim antérieures à la résolution 3h.
         cur = conn.execute("""
-            SELECT positions_json, n_particles, active_fraction, simulated_at,
-                   sim_start, current_source, day_offset, hour_offset
+            SELECT positions_json, positions_viz_json, n_particles, active_fraction,
+                   simulated_at, sim_start, current_source, day_offset, hour_offset
             FROM drift_predictions
             WHERE day_offset = ?
               AND (hour_offset IS NULL OR hour_offset % 24 = 0)
@@ -235,8 +235,17 @@ def api_drift():
     if not row:
         return jsonify({'error': 'No drift data'}), 404
 
+    # La carte préfère l'échantillon dense régional (positions_viz_json) ;
+    # repli sur l'échantillon uniforme pour les sim antérieures à ce champ.
+    raw = None
     try:
-        positions = json.loads(row['positions_json'])
+        raw = row['positions_viz_json']
+    except (IndexError, KeyError):
+        raw = None
+    if not raw:
+        raw = row['positions_json']
+    try:
+        positions = json.loads(raw)
     except (json.JSONDecodeError, TypeError):
         positions = []
 

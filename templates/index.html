@@ -602,14 +602,30 @@
             }
         }
 
-        async function loadDriftHour(hour) {
+        // Cache des snapshots de dérive par heure (évite de refetcher pendant l'animation)
+        const driftCache = {};
+        let driftSimStart = null;
+
+        async function getDrift(hour) {
+            if (hour < 0) return null;
+            if (driftCache[hour]) return driftCache[hour];
             try {
                 const res = await fetch(`/api/drift?hour=${hour}`);
-                if (!res.ok) return;
+                if (!res.ok) return null;
                 const data = await res.json();
-                renderDrift(data);
-                updateHourLabel(hour, data.sim_start);
-            } catch (e) { console.error(e); }
+                driftCache[hour] = data.positions || [];
+                if (data.sim_start) driftSimStart = data.sim_start;
+                return driftCache[hour];
+            } catch (e) { console.error(e); return null; }
+        }
+
+        async function loadDriftHour(hour) {
+            const current = await getDrift(hour);
+            if (!current) return;
+            // Traînée : 2 pas précédents (−6h, −3h) en plus pâle
+            const [t6, t3] = await Promise.all([getDrift(hour - 6), getDrift(hour - 3)]);
+            renderDriftTrail([t6, t3, current]);
+            updateHourLabel(hour, driftSimStart);
         }
 
         // Libellé du curseur : jour + heure locale SBH (UTC-4) si t0 connu
@@ -760,23 +776,27 @@
             loadDriftHour(currentHour);
         }
 
-        function renderDrift(data) {
+        // Rendu d'une traînée : snapshots du plus ancien (pâle/petit) au plus récent (vif/gros)
+        function renderDriftTrail(snapshots) {
             driftLayer.clearLayers();
-            if (!data.positions) return;
-
-            // Échantillonnage : on prend 1 point sur 3 jusqu'à 200 max
-            const step = Math.max(1, Math.floor(data.positions.length / 200));
-            for (let i = 0; i < data.positions.length; i += step) {
-                const [lon, lat] = data.positions[i];
-                L.circleMarker([lat, lon], {
-                    radius: 1.8,
-                    fillColor: '#f59e0b',
-                    color: '#f59e0b',
-                    weight: 0,
-                    fillOpacity: 0.45,
-                    className: 'drift-particle',
-                }).addTo(driftLayer);
-            }
+            const opacities = [0.12, 0.24, 0.5];
+            const radii = [1.3, 1.5, 1.8];
+            snapshots.forEach((positions, i) => {
+                if (!positions || !positions.length) return;
+                // Échantillonnage : ~200 points max par snapshot
+                const step = Math.max(1, Math.floor(positions.length / 200));
+                for (let k = 0; k < positions.length; k += step) {
+                    const [lon, lat] = positions[k];
+                    L.circleMarker([lat, lon], {
+                        radius: radii[i],
+                        fillColor: '#f59e0b',
+                        color: '#f59e0b',
+                        weight: 0,
+                        fillOpacity: opacities[i],
+                        className: 'drift-particle',
+                    }).addTo(driftLayer);
+                }
+            });
         }
 
         // === Boutons jours (= curseur au début du jour : hour = day*24) ===

@@ -112,7 +112,10 @@
         /* ─── Time controls ──────────────────────────────────────────────── */
         .time-control { display: flex; gap: 4px; margin-bottom: 8px; }
         .hour-control { margin-top: 6px; }
-        .hour-control input[type=range] { width: 100%; accent-color: #f59e0b; cursor: pointer; }
+        .hour-row { display: flex; align-items: center; gap: 8px; }
+        .hour-row input[type=range] { flex: 1; accent-color: #f59e0b; cursor: pointer; }
+        #play-btn { flex: 0 0 auto; width: 28px; height: 28px; border: none; border-radius: 50%; background: #f59e0b; color: #1a1a1a; font-size: 12px; cursor: pointer; display: flex; align-items: center; justify-content: center; padding: 0; }
+        #play-btn:hover { background: #fbbf24; }
         .hour-label { font-size: 12px; color: #f59e0b; font-weight: 600; text-align: center; margin-top: 2px; }
         .time-btn {
             flex: 1;
@@ -398,7 +401,10 @@
                     <button class="time-btn" data-day="4">J+4</button>
                 </div>
                 <div class="hour-control">
-                    <input type="range" id="hour-slider" min="0" max="120" step="3" value="0">
+                    <div class="hour-row">
+                        <button id="play-btn" title="Lancer l'animation">▶</button>
+                        <input type="range" id="hour-slider" min="0" max="120" step="3" value="0">
+                    </div>
                     <div class="hour-label" id="hour-label">Aujourd'hui · +0h</div>
                 </div>
             </div>
@@ -781,6 +787,7 @@
                 currentHour = parseInt(btn.dataset.day) * 24;
                 document.getElementById('hour-slider').value = currentHour;
                 updateMap();
+                if (playTimer) stopPlay();
             };
         });
 
@@ -789,7 +796,39 @@
             currentHour = parseInt(e.target.value);
             syncDayButtons(currentHour);
             updateMap();
+            if (playTimer) stopPlay();   // toute action manuelle stoppe l'animation
         });
+
+        // === Auto-play (défilement de la dérive toutes les 1.2s) ===
+        let playTimer = null;
+        const PLAY_MAX = 120;       // 5 jours
+        const PLAY_INTERVAL = 1200; // ms entre chaque pas de 3h
+
+        function stopPlay() {
+            clearInterval(playTimer);
+            playTimer = null;
+            document.getElementById('play-btn').textContent = '▶';
+            document.getElementById('play-btn').title = "Lancer l'animation";
+        }
+
+        function startPlay() {
+            const btn = document.getElementById('play-btn');
+            btn.textContent = '❚❚';
+            btn.title = "Mettre en pause";
+            // Si on est à la fin, on repart du début
+            if (currentHour >= PLAY_MAX) currentHour = 0;
+            playTimer = setInterval(() => {
+                currentHour += 3;
+                if (currentHour > PLAY_MAX) { stopPlay(); return; }
+                document.getElementById('hour-slider').value = currentHour;
+                syncDayButtons(currentHour);
+                updateMap();
+            }, PLAY_INTERVAL);
+        }
+
+        document.getElementById('play-btn').onclick = () => {
+            if (playTimer) stopPlay(); else startPlay();
+        };
 
         // === Subscribe ===
         function populateSubscribeDropdown(beaches) {

@@ -111,6 +111,9 @@
 
         /* ─── Time controls ──────────────────────────────────────────────── */
         .time-control { display: flex; gap: 4px; margin-bottom: 8px; }
+        .hour-control { margin-top: 6px; }
+        .hour-control input[type=range] { width: 100%; accent-color: #f59e0b; cursor: pointer; }
+        .hour-label { font-size: 12px; color: #f59e0b; font-weight: 600; text-align: center; margin-top: 2px; }
         .time-btn {
             flex: 1;
             padding: 8px 4px;
@@ -394,6 +397,10 @@
                     <button class="time-btn" data-day="3">J+3</button>
                     <button class="time-btn" data-day="4">J+4</button>
                 </div>
+                <div class="hour-control">
+                    <input type="range" id="hour-slider" min="0" max="120" step="3" value="0">
+                    <div class="hour-label" id="hour-label">Aujourd'hui · +0h</div>
+                </div>
             </div>
 
             <div class="section">
@@ -488,6 +495,7 @@
     <script>
         const SBH_CENTER = [17.9, -62.83];
         let currentDay = 0;
+        let currentHour = 0;   // heures depuis t0 (0,3,…,120) — curseur 3h
         let beachData = {};
         let driftLayer = null;
         let beachLayer = null;
@@ -588,13 +596,34 @@
             }
         }
 
-        async function loadDrift(day) {
+        async function loadDriftHour(hour) {
             try {
-                const res = await fetch(`/api/drift?day=${day}`);
+                const res = await fetch(`/api/drift?hour=${hour}`);
                 if (!res.ok) return;
                 const data = await res.json();
                 renderDrift(data);
+                updateHourLabel(hour, data.sim_start);
             } catch (e) { console.error(e); }
+        }
+
+        // Libellé du curseur : jour + heure locale SBH (UTC-4) si t0 connu
+        function updateHourLabel(hour, simStart) {
+            const dayLabel = hour < 24 ? "Aujourd'hui" : (hour < 48 ? 'Demain' : `J+${Math.floor(hour / 24)}`);
+            let suffix = `+${hour}h`;
+            if (simStart) {
+                const t0 = new Date(simStart.endsWith('Z') ? simStart : simStart + 'Z');
+                const local = new Date(t0.getTime() + hour * 3600 * 1000 - 4 * 3600 * 1000);
+                suffix = `${String(local.getUTCHours()).padStart(2, '0')}h`;
+            }
+            document.getElementById('hour-label').textContent = `${dayLabel} · ${suffix}`;
+        }
+
+        // Synchronise les boutons jours avec l'heure courante
+        function syncDayButtons(hour) {
+            const day = Math.floor(hour / 24);
+            document.querySelectorAll('.time-btn').forEach(b => {
+                b.classList.toggle('active', parseInt(b.dataset.day) === day);
+            });
         }
 
         async function loadHealth() {
@@ -714,12 +743,15 @@
             beachLayer.clearLayers();
             if (!beachData.beaches) return;
 
+            // Marqueurs plages = risque journalier du jour contenant l'heure courante
+            currentDay = Math.floor(currentHour / 24);
             beachData.beaches.forEach(beach => {
                 const marker = createBeachMarker(beach, currentDay);
                 if (marker) beachLayer.addLayer(marker);
             });
 
-            loadDrift(currentDay);
+            // Particules de dérive = snapshot 3h exact
+            loadDriftHour(currentHour);
         }
 
         function renderDrift(data) {
@@ -741,14 +773,22 @@
             }
         }
 
-        // === Boutons jours ===
+        // === Boutons jours (= curseur au début du jour : hour = day*24) ===
         document.querySelectorAll('.time-btn').forEach(btn => {
             btn.onclick = () => {
                 document.querySelectorAll('.time-btn').forEach(b => b.classList.remove('active'));
                 btn.classList.add('active');
-                currentDay = parseInt(btn.dataset.day);
+                currentHour = parseInt(btn.dataset.day) * 24;
+                document.getElementById('hour-slider').value = currentHour;
                 updateMap();
             };
+        });
+
+        // === Curseur horaire (pas 3h) ===
+        document.getElementById('hour-slider').addEventListener('input', (e) => {
+            currentHour = parseInt(e.target.value);
+            syncDayButtons(currentHour);
+            updateMap();
         });
 
         // === Subscribe ===

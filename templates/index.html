@@ -498,7 +498,7 @@
                     <select id="subscribe-beach">
                         <option value="">Choisir une plage...</option>
                     </select>
-                    <button onclick="subscribeToBeach()">M'abonner via Telegram</button>
+                    <button id="subscribe-btn">M'abonner via Telegram</button>
                     <div id="subscribe-result" class="subscribe-result"></div>
                 </div>
             </div>
@@ -512,8 +512,8 @@
         <div id="map"></div>
     </div>
 
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <script>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" nonce="{{ csp_nonce }}"></script>
+    <script nonce="{{ csp_nonce }}">
         const SBH_CENTER = [17.9, -62.83];
         // Boîte régionale (Petites Antilles autour de SBH) pour la vue dérive
         const REGION_BOUNDS = L.latLngBounds([16.0, -65.5], [19.6, -60.3]);
@@ -912,6 +912,9 @@
                 sel.appendChild(opt);
             });
         }
+
+        // Bouton d'abonnement (listener au lieu d'un onclick inline, requis par la CSP à nonce)
+        document.getElementById('subscribe-btn').addEventListener('click', subscribeToBeach);
 
         async function subscribeToBeach() {
             const beach = document.getElementById('subscribe-beach').value;

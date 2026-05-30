@@ -21,12 +21,13 @@ Endpoints
 
 import json
 import logging
+import secrets
 import sqlite3
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from flask import Flask, jsonify, render_template, request, redirect
+from flask import Flask, g, jsonify, render_template, request, redirect
 
 # Permet d'importer beaches_db et sargassum_admin_routes
 sys.path.insert(0, str(Path(__file__).parent))
@@ -56,9 +57,14 @@ register_admin_routes(app)
 # tuiles carto, API météo Open-Meteo).
 @app.after_request
 def _set_security_headers(resp):
+    # script-src par nonce : seuls nos <script nonce="..."> s'exécutent.
+    # Un script injecté (inline OU externe) sans le nonce est bloqué par le
+    # navigateur. Le nonce est régénéré à chaque requête (cf. index()).
+    nonce = getattr(g, "csp_nonce", None)
+    script_src = f"'self' 'nonce-{nonce}'" if nonce else "'self'"
     resp.headers["Content-Security-Policy"] = (
         "default-src 'self'; "
-        "script-src 'self' 'unsafe-inline' https://unpkg.com; "
+        f"script-src {script_src}; "
         "style-src 'self' 'unsafe-inline' https://unpkg.com https://fonts.googleapis.com; "
         "font-src 'self' data: https://fonts.gstatic.com; "
         "img-src 'self' data: https:; "
@@ -115,8 +121,14 @@ def risk_to_fr(level: str) -> str:
 
 @app.route('/')
 def index():
-    """Page d'accueil avec la carte Leaflet."""
-    return render_template('index.html', dashboard_url=DASHBOARD_URL)
+    """Page d'accueil avec la carte Leaflet.
+
+    Génère un nonce CSP par requête : seules nos balises <script nonce="..."> sont
+    exécutées par le navigateur ; tout script injecté sans ce nonce est bloqué.
+    """
+    nonce = secrets.token_urlsafe(16)
+    g.csp_nonce = nonce
+    return render_template('index.html', dashboard_url=DASHBOARD_URL, csp_nonce=nonce)
 
 
 @app.route('/dashboard')

@@ -120,6 +120,11 @@
         #region-btn { width: 100%; margin-top: 8px; padding: 7px; border: 1px solid #f59e0b; border-radius: 6px; background: transparent; color: #f59e0b; font-size: 12px; font-weight: 600; cursor: pointer; }
         #region-btn:hover { background: rgba(245,158,11,0.12); }
         #region-btn.active { background: #f59e0b; color: #1a1a1a; }
+        .speed-row { display: flex; align-items: center; gap: 6px; margin-top: 6px; font-size: 11px; color: #94a3b8; }
+        .speed-btn { padding: 2px 9px; border: 1px solid #475569; border-radius: 5px; background: transparent; color: #cbd5e1; font-size: 11px; font-weight: 600; cursor: pointer; }
+        .speed-btn:hover { border-color: #f59e0b; }
+        .speed-btn.active { background: #f59e0b; border-color: #f59e0b; color: #1a1a1a; }
+        .drift-hint { margin: 8px 0 0; font-size: 11px; line-height: 1.4; color: #94a3b8; }
         .time-btn {
             flex: 1;
             padding: 8px 4px;
@@ -409,7 +414,13 @@
                         <input type="range" id="hour-slider" min="0" max="120" step="3" value="0">
                     </div>
                     <div class="hour-label" id="hour-label">Aujourd'hui · +0h</div>
+                    <div class="speed-row">
+                        <span>Vitesse</span>
+                        <button class="speed-btn active" data-speed="1">×1</button>
+                        <button class="speed-btn" data-speed="2">×2</button>
+                    </div>
                     <button id="region-btn" title="Voir le champ de sargasses approcher">🌊 Vue régionale</button>
+                    <p class="drift-hint">🟠 Points pâles = positions passées · vifs = position prévue à l'heure choisie.</p>
                 </div>
             </div>
 
@@ -634,14 +645,18 @@
             updateHourLabel(hour, driftSimStart);
         }
 
-        // Libellé du curseur : jour + heure locale SBH (UTC-4) si t0 connu
+        // Libellé du curseur : jour + date/heure locale SBH (UTC-4) complète si t0 connu
         function updateHourLabel(hour, simStart) {
             const dayLabel = hour < 24 ? "Aujourd'hui" : (hour < 48 ? 'Demain' : `J+${Math.floor(hour / 24)}`);
             let suffix = `+${hour}h`;
             if (simStart) {
                 const t0 = new Date(simStart.endsWith('Z') ? simStart : simStart + 'Z');
+                // On décale de -4h (heure locale SBH) puis on formate en UTC (offset déjà appliqué)
                 const local = new Date(t0.getTime() + hour * 3600 * 1000 - 4 * 3600 * 1000);
-                suffix = `${String(local.getUTCHours()).padStart(2, '0')}h`;
+                suffix = local.toLocaleString('fr-FR', {
+                    weekday: 'short', day: 'numeric', month: 'short',
+                    hour: '2-digit', minute: '2-digit', timeZone: 'UTC',
+                });
             }
             document.getElementById('hour-label').textContent = `${dayLabel} · ${suffix}`;
         }
@@ -831,8 +846,9 @@
         // === Auto-play (défilement de la dérive toutes les 1.2s) ===
         let playTimer = null;
         let regionalView = false;   // vue large (Petites Antilles) vs vue île
+        let playSpeed = 1;          // multiplicateur de vitesse (×1, ×2)
         const PLAY_MAX = 120;       // 5 jours
-        const PLAY_INTERVAL = 1200; // ms entre chaque pas de 3h
+        const PLAY_INTERVAL = 1200; // ms entre chaque pas de 3h (à vitesse ×1)
 
         // Bascule vue régionale (champ de sargasses) ↔ vue île (plages)
         function setRegionalView(on) {
@@ -868,8 +884,18 @@
                 document.getElementById('hour-slider').value = currentHour;
                 syncDayButtons(currentHour);
                 updateMap();
-            }, PLAY_INTERVAL);
+            }, PLAY_INTERVAL / playSpeed);
         }
+
+        // === Boutons de vitesse (×1 / ×2) ===
+        document.querySelectorAll('.speed-btn').forEach(btn => {
+            btn.onclick = () => {
+                document.querySelectorAll('.speed-btn').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                playSpeed = parseInt(btn.dataset.speed);
+                if (playTimer) { stopPlay(); startPlay(); }   // relance avec le nouvel intervalle
+            };
+        });
 
         document.getElementById('play-btn').onclick = () => {
             if (playTimer) stopPlay(); else startPlay();

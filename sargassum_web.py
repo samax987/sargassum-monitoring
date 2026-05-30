@@ -47,6 +47,29 @@ app = Flask(__name__, template_folder=str(Path(__file__).parent / "templates"))
 # Enregistre les routes admin et stats
 register_admin_routes(app)
 
+
+# ── Sécurité : en-têtes HTTP (défense en profondeur) ────────────────────────────
+# La CSP bloque tout script chargé depuis un domaine non autorisé : si un
+# <script src="https://domaine-malveillant/..."> était injecté dans la page,
+# le navigateur refuserait de l'exécuter. On autorise uniquement nos propres
+# ressources + les CDN légitimes réellement utilisés (Leaflet, Google Fonts,
+# tuiles carto, API météo Open-Meteo).
+@app.after_request
+def _set_security_headers(resp):
+    resp.headers["Content-Security-Policy"] = (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline' https://unpkg.com; "
+        "style-src 'self' 'unsafe-inline' https://unpkg.com https://fonts.googleapis.com; "
+        "font-src 'self' data: https://fonts.gstatic.com; "
+        "img-src 'self' data: https:; "
+        "connect-src 'self' https://api.open-meteo.com https://marine-api.open-meteo.com; "
+        "object-src 'none'; base-uri 'self'; frame-ancestors 'self'"
+    )
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    resp.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    return resp
+
+
 # Au demarrage : seed les plages depuis beaches.py si la table est vide
 def _seed_beaches_if_empty():
     if not beaches_db.is_table_empty():

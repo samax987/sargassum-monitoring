@@ -516,22 +516,40 @@ def collect_copernicus(conn: sqlite3.Connection) -> bool:
     DATASET = "cmems_obs-mob_glo_phy-cur_nrt_0.25deg_PT1H-i"
 
     from datetime import timedelta
-    end_dt   = datetime.now(timezone.utc)
-    start_dt = end_dt - timedelta(days=2)
-    fmt      = "%Y-%m-%dT%H:%M:%S"
+    fmt = "%Y-%m-%dT%H:%M:%S"
 
-    ds = copernicusmarine.open_dataset(
-        dataset_id        = DATASET,
-        username          = username,
-        password          = password,
-        variables         = ["uo", "vo"],
-        minimum_latitude  = CARIB["lat_min"],
-        maximum_latitude  = CARIB["lat_max"],
-        minimum_longitude = CARIB["lon_min"],
-        maximum_longitude = CARIB["lon_max"],
-        start_datetime    = start_dt.strftime(fmt),
-        end_datetime      = end_dt.strftime(fmt),
-    )
+    def _open_ds(end_offset_days: int):
+        """Ouvre le dataset Copernicus sur fenetre [-2j; 0] decalee de end_offset_days vers le passe."""
+        end_dt   = datetime.now(timezone.utc) - timedelta(days=end_offset_days)
+        start_dt = end_dt - timedelta(days=2)
+        return copernicusmarine.open_dataset(
+            dataset_id        = DATASET,
+            username          = username,
+            password          = password,
+            variables         = ["uo", "vo"],
+            minimum_latitude  = CARIB["lat_min"],
+            maximum_latitude  = CARIB["lat_max"],
+            minimum_longitude = CARIB["lon_min"],
+            maximum_longitude = CARIB["lon_max"],
+            start_datetime    = start_dt.strftime(fmt),
+            end_datetime      = end_dt.strftime(fmt),
+        )
+
+    # Tentative fenetre normale, puis fallback de plus en plus ancien si Copernicus en retard
+    ds = None
+    for offset_days in (0, 2, 4, 6):
+        try:
+            ds = _open_ds(offset_days)
+            if offset_days > 0:
+                print(f"  ⚠️  COPERNICUS en retard, fallback fenetre [-{offset_days+2}j; -{offset_days}j]")
+            break
+        except Exception as e:
+            err_str = str(e)
+            if "CoordinatesOutOfDatasetBounds" in err_str or "coordinate" in err_str.lower():
+                continue  # essayer le decalage suivant
+            raise  # autre erreur reelle : on remonte
+    if ds is None:
+        raise RuntimeError("Copernicus indisponible : dataset en retard de plus de 8 jours")
 
     # Dernière tranche temporelle disponible
     ds_t      = ds.isel(time=-1)

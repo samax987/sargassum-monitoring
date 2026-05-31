@@ -513,17 +513,20 @@ def collect_copernicus(conn: sqlite3.Connection) -> bool:
             "  Inscription gratuite : https://data.marine.copernicus.eu"
         )
 
-    DATASET = "cmems_obs-mob_glo_phy-cur_nrt_0.25deg_PT1H-i"
+    # Strategie en cascade : prefere anfc (modele analyse+forecast, latence ~0h, 0.083 deg)
+    # mais fallback sur nrt (observations satellite, latence 2-3j, 0.25 deg) avec decalages
+    DATASET_ANFC = "cmems_mod_glo_phy_anfc_0.083deg_PT1H-m"   # haute resolution, frais
+    DATASET_NRT  = "cmems_obs-mob_glo_phy-cur_nrt_0.25deg_PT1H-i"  # observations, plus ancien
 
     from datetime import timedelta
     fmt = "%Y-%m-%dT%H:%M:%S"
 
-    def _open_ds(end_offset_days: int):
-        """Ouvre le dataset Copernicus sur fenetre [-2j; 0] decalee de end_offset_days vers le passe."""
+    def _open_ds(dataset_id: str, end_offset_days: int = 0):
+        """Ouvre un dataset Copernicus sur fenetre [-2j; 0] decalee vers le passe."""
         end_dt   = datetime.now(timezone.utc) - timedelta(days=end_offset_days)
         start_dt = end_dt - timedelta(days=2)
         return copernicusmarine.open_dataset(
-            dataset_id        = DATASET,
+            dataset_id        = dataset_id,
             username          = username,
             password          = password,
             variables         = ["uo", "vo"],
@@ -535,21 +538,37 @@ def collect_copernicus(conn: sqlite3.Connection) -> bool:
             end_datetime      = end_dt.strftime(fmt),
         )
 
-    # Tentative fenetre normale, puis fallback de plus en plus ancien si Copernicus en retard
+    # Cascade : anfc d abord, puis nrt avec fallbacks de fenetre de plus en plus anciens
+    attempts = [
+        (DATASET_ANFC, 0, "anfc 0.083deg (frais, haute resolution)"),
+        (DATASET_NRT,  0, "nrt 0.25deg (observations satellite)"),
+        (DATASET_NRT,  2, "nrt fallback fenetre [-4j; -2j]"),
+        (DATASET_NRT,  4, "nrt fallback fenetre [-6j; -4j]"),
+        (DATASET_NRT,  6, "nrt fallback fenetre [-8j; -6j]"),
+    ]
+
     ds = None
-    for offset_days in (0, 2, 4, 6):
+    DATASET = None
+    for ds_id, offset, label in attempts:
         try:
-            ds = _open_ds(offset_days)
-            if offset_days > 0:
-                print(f"  ⚠️  COPERNICUS en retard, fallback fenetre [-{offset_days+2}j; -{offset_days}j]")
+            ds = _open_ds(ds_id, end_offset_days=offset)
+            DATASET = ds_id
+            # Loggue uniquement les fallbacks (pas le cas nominal anfc)
+            if ds_id != DATASET_ANFC or offset > 0:
+                print(f"  ⚠️  Copernicus fallback : {label}")
             break
         except Exception as e:
             err_str = str(e)
+            # Erreur de bornes temporelles : essayer le suivant
             if "CoordinatesOutOfDatasetBounds" in err_str or "coordinate" in err_str.lower():
-                continue  # essayer le decalage suivant
-            raise  # autre erreur reelle : on remonte
+                continue
+            # Erreur sur anfc (indispo, auth, etc.) : on tente quand meme le nrt
+            if ds_id == DATASET_ANFC:
+                print(f"  ⚠️  anfc indispo ({type(e).__name__}), bascule sur nrt")
+                continue
+            raise
     if ds is None:
-        raise RuntimeError("Copernicus indisponible : dataset en retard de plus de 8 jours")
+        raise RuntimeError("Copernicus indisponible : aucune source ne repond")
 
     # Dernière tranche temporelle disponible
     ds_t      = ds.isel(time=-1)

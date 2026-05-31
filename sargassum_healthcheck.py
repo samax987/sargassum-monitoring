@@ -44,7 +44,7 @@ ENV_PATH = Path(__file__).parent / ".env"
 
 # Seuils de fraicheur (en heures) avant declenchement d'alerte
 THRESHOLDS = {
-    'last_cron':      8,    # cron tourne toutes les 6h, marge 2h
+    'last_cron': 12,    # cron tourne toutes les 6h, marge 6h pour latence Copernicus
     'last_scoring':   8,    # beaches.py tourne dans le cron
     'last_drift':     24,   # drift peut echouer 1 fois sans paniquer
     'last_news':      48,   # scraper tourne 1x/jour

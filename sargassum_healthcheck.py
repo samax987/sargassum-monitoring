@@ -44,10 +44,11 @@ ENV_PATH = Path(__file__).parent / ".env"
 
 # Seuils de fraicheur (en heures) avant declenchement d'alerte
 THRESHOLDS = {
-    'last_cron': 12,    # cron tourne toutes les 6h, marge 6h pour latence Copernicus
+    'last_cron': 7,     # cron tourne toutes les 6h, marge 1h
     'last_scoring':   8,    # beaches.py tourne dans le cron
     'last_drift':     24,   # drift peut echouer 1 fois sans paniquer
     'last_news':      48,   # scraper tourne 1x/jour
+    'anfc_max_age':   24,   # alerte si anfc indispo et fallback nrt utilise depuis 24h+
 }
 
 # URL du dashboard a verifier
@@ -120,14 +121,34 @@ def _hours_since(iso_str: str) -> float:
 
 def check_last_cron(conn: sqlite3.Connection) -> tuple[bool, str]:
     """Verifie que le cron a tourne recemment."""
-    cur = conn.execute("SELECT MAX(collected_at) FROM copernicus_currents")
-    last = cur.fetchone()[0]
-    if not last:
+    cur = conn.execute("SELECT MAX(collected_at), dataset FROM copernicus_currents WHERE collected_at = (SELECT MAX(collected_at) FROM copernicus_currents)")
+    row = cur.fetchone()
+    if not row or not row[0]:
         return False, "Aucune donnee dans copernicus_currents"
+    last, dataset = row
     age_h = _hours_since(last)
     threshold = THRESHOLDS['last_cron']
+    # Tag court selon le dataset utilise (anfc = nominal, nrt = fallback)
+    tag = "anfc" if dataset and "anfc" in dataset else ("nrt" if dataset and "nrt" in dataset else "?")
     if age_h > threshold:
-        return False, f"Dernier cron il y a {age_h:.1f}h (seuil: {threshold}h)"
+        return False, f"Dernier cron il y a {age_h:.1f}h (seuil: {threshold}h, source={tag})"
+    return True, f"OK ({age_h:.1f}h, source={tag})"
+
+
+def check_anfc_health(conn: sqlite3.Connection) -> tuple[bool, str]:
+    """Verifie que anfc (dataset nominal haute resolution) est utilise recemment.
+
+    Si on est en fallback nrt depuis trop longtemps, c'est qu'anfc a un probleme
+    qui merite une investigation (auth, dataset retire, maintenance Mercator, etc.)."""
+    cur = conn.execute("SELECT MAX(collected_at) FROM copernicus_currents WHERE dataset LIKE '%anfc%'")
+    last = cur.fetchone()[0]
+    if not last:
+        # Aucune entree anfc historique : peut-etre nouveau systeme, on tolere
+        return True, "Aucune entree anfc en BD (premier lancement ?)"
+    age_h = _hours_since(last)
+    threshold = THRESHOLDS['anfc_max_age']
+    if age_h > threshold:
+        return False, f"anfc inutilise depuis {age_h:.1f}h (seuil: {threshold}h) - fallback nrt actif"
     return True, f"OK ({age_h:.1f}h)"
 
 
@@ -170,6 +191,7 @@ def check_dashboard() -> tuple[bool, str]:
 
 CHECKS = [
     ('cron',      check_last_cron,    'Pipeline cron (collecte 6h)'),
+    ('anfc',      check_anfc_health,  'Source courants anfc (qualite)'),
     ('scoring',   check_last_scoring, 'Scoring plages (beaches.py)'),
     ('drift',     check_last_drift,   'Simulation OpenDrift (5j)'),
     ('dashboard', check_dashboard,    'Dashboard Streamlit :8501'),

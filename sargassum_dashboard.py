@@ -375,7 +375,7 @@ with st.sidebar:
     st.divider()
     page = st.radio(
         "Navigation",
-        ["Carte", "Métriques", "Actualités", "Plages", "Webcams", "Observations", "Calibration"],
+        ["Carte", "Métriques", "Actualités", "Plages", "Webcams", "Observations", "Contributeurs", "Calibration"],
         label_visibility="collapsed",
     )
 
@@ -1048,11 +1048,9 @@ elif page == "Observations":
     """, unsafe_allow_html=True)
 
     st.header("📍 Observations & Intelligence IA")
-    st.caption("Saisie terrain, analyse d'URL ou de texte par Claude Haiku, collecte web automatique.")
+    st.caption("Saisie terrain des observations sargasses.")
 
-    tab_terrain, tab_url, tab_texte, tab_auto = st.tabs([
-        "📋 Terrain", "🔗 Analyser URL", "📝 Analyser texte", "🤖 Collecte IA"
-    ])
+    (tab_terrain,) = st.tabs(["📋 Terrain"])
 
     # ──────────────────────────────────────────────────────────────────────────
     # ONGLET 1 : Formulaire terrain
@@ -1110,218 +1108,6 @@ elif page == "Observations":
     # ──────────────────────────────────────────────────────────────────────────
     # ONGLET 2 : Analyser une URL avec Claude Haiku
     # ──────────────────────────────────────────────────────────────────────────
-    with tab_url:
-        st.subheader("🔗 Analyser un article ou une page web")
-        st.caption("Colle l'URL d'un article, rapport ou post. Claude Haiku extrait les observations sargasses.")
-
-        url_input = st.text_input(
-            "URL à analyser",
-            placeholder="https://www.rci.fm/martinique/infos/…",
-            key="url_input"
-        )
-        col_u1, col_u2 = st.columns([1, 3])
-        with col_u1:
-            analyze_url_btn = st.button("🔍 Analyser", key="analyze_url_btn", type="primary")
-
-        if analyze_url_btn and url_input.strip():
-            with st.spinner("Claude Haiku analyse la page…"):
-                import sys, importlib
-                _intel_path = str(__import__('pathlib').Path(db_path).parent)
-                if _intel_path not in sys.path:
-                    sys.path.insert(0, _intel_path)
-                try:
-                    import sarga_claude_intel as _sci
-                    importlib.reload(_sci)
-                    obs_list = _sci.analyze_url(url_input.strip())
-                except Exception as _e:
-                    obs_list = []
-                    st.error(f"Erreur : {_e}")
-
-            if not obs_list:
-                st.warning("Aucune observation sargasses trouvée dans cette page.")
-            else:
-                st.success(f"{len(obs_list)} observation(s) trouvée(s) !")
-                RISK_ICONS = {"none": "🟢", "low": "🟡", "medium": "🟠", "high": "🔴"}
-
-                if "url_pending_obs" not in st.session_state:
-                    st.session_state["url_pending_obs"] = []
-                st.session_state["url_pending_obs"] = obs_list
-
-                for obs in obs_list:
-                    icon = RISK_ICONS.get(obs.get("risk_level", "low"), "⚪")
-                    st.markdown(
-                        f"**{icon} {obs.get('island', '?')} / {obs.get('beach_name', '?')}** "
-                        f"— {obs.get('event_date', '?')} "
-                        f"— confiance {obs.get('confidence', 0):.0%}"
-                    )
-                    if obs.get("description"):
-                        st.caption(obs["description"])
-
-                if st.button("💾 Enregistrer ces observations en DB", key="save_url_obs"):
-                    conn_w = sqlite3.connect(db_path)
-                    stored = _sci.store_observations(
-                        st.session_state.get("url_pending_obs", []),
-                        source_name=url_input[:60],
-                        source_url=url_input,
-                        conn=conn_w,
-                        dry_run=False,
-                    )
-                    conn_w.close()
-                    st.success(f"{stored} observation(s) enregistrée(s) !")
-                    st.session_state["url_pending_obs"] = []
-
-    # ──────────────────────────────────────────────────────────────────────────
-    # ONGLET 3 : Analyser un texte brut
-    # ──────────────────────────────────────────────────────────────────────────
-    with tab_texte:
-        st.subheader("📝 Analyser un texte ou message")
-        st.caption("Colle n'importe quel texte : WhatsApp, email, rapport PDF, tweet… Claude Haiku structure les infos.")
-
-        text_input = st.text_area(
-            "Texte à analyser",
-            placeholder="Ex: 'Ce matin à Tartane il y a un échouage massif de sargasses, les algues font 50cm d'épaisseur sur toute la plage…'",
-            height=180,
-            key="text_input"
-        )
-        source_label = st.text_input(
-            "Source (optionnel)",
-            placeholder="Ex: WhatsApp groupe pêcheurs, Facebook Martinique, article RCI",
-            key="text_source_label"
-        )
-        analyze_text_btn = st.button("🔍 Analyser le texte", key="analyze_text_btn", type="primary")
-
-        if analyze_text_btn and text_input.strip():
-            with st.spinner("Claude Haiku analyse le texte…"):
-                import sys, importlib
-                _intel_path = str(__import__('pathlib').Path(db_path).parent)
-                if _intel_path not in sys.path:
-                    sys.path.insert(0, _intel_path)
-                try:
-                    import sarga_claude_intel as _sci2
-                    importlib.reload(_sci2)
-                    obs_list2 = _sci2.analyze_text(
-                        text_input.strip(),
-                        source_hint=source_label.strip() or "saisie dashboard"
-                    )
-                except Exception as _e2:
-                    obs_list2 = []
-                    st.error(f"Erreur : {_e2}")
-
-            RISK_ICONS = {"none": "🟢", "low": "🟡", "medium": "🟠", "high": "🔴"}
-
-            if not obs_list2:
-                st.warning("Aucune observation sargasses trouvée dans ce texte.")
-            else:
-                st.success(f"{len(obs_list2)} observation(s) extraite(s) !")
-                st.session_state["text_pending_obs"] = obs_list2
-
-                for obs in obs_list2:
-                    icon = RISK_ICONS.get(obs.get("risk_level", "low"), "⚪")
-                    st.markdown(
-                        f"**{icon} {obs.get('island', '?')} / {obs.get('beach_name', '?')}** "
-                        f"— {obs.get('event_date', '?')} "
-                        f"— confiance {obs.get('confidence', 0):.0%}"
-                    )
-                    if obs.get("description"):
-                        st.caption(obs["description"])
-
-                src_name = source_label.strip() or "texte manuel"
-                if st.button("💾 Enregistrer en DB", key="save_text_obs"):
-                    conn_w = sqlite3.connect(db_path)
-                    stored2 = _sci2.store_observations(
-                        st.session_state.get("text_pending_obs", []),
-                        source_name=src_name,
-                        source_url="",
-                        conn=conn_w,
-                        dry_run=False,
-                    )
-                    conn_w.close()
-                    st.success(f"{stored2} observation(s) enregistrée(s) !")
-                    st.session_state["text_pending_obs"] = []
-
-    # ──────────────────────────────────────────────────────────────────────────
-    # ONGLET 4 : Collecte IA automatique
-    # ──────────────────────────────────────────────────────────────────────────
-    with tab_auto:
-        st.subheader("🤖 Intelligence IA — Collecte web automatique")
-        st.caption("Claude Haiku parcourt les médias caribéens et sources scientifiques pour détecter les échouages récents.")
-
-        # Infos sur la dernière collecte
-        conn_log = get_connection(db_path)
-        if conn_log:
-            try:
-                df_log = pd.read_sql_query(
-                    """SELECT run_at, source_name, obs_count, status
-                       FROM claude_intel_log
-                       ORDER BY run_at DESC
-                       LIMIT 20""",
-                    conn_log,
-                )
-                conn_log.close()
-            except Exception:
-                df_log = pd.DataFrame()
-        else:
-            df_log = pd.DataFrame()
-
-        if not df_log.empty:
-            last_run = df_log["run_at"].iloc[0][:16].replace("T", " ")
-            total_found = df_log.groupby("run_at")["obs_count"].sum()
-            st.info(f"Dernière collecte IA : **{last_run} UTC** | {int(total_found.iloc[0])} obs. trouvée(s)")
-        else:
-            st.info("Aucune collecte IA effectuée pour l'instant. Cron actif à 08h00 UTC chaque jour.")
-
-        col_a1, col_a2 = st.columns(2)
-        with col_a1:
-            launch_collect = st.button("▶️ Lancer la collecte maintenant", type="primary", key="launch_collect")
-        with col_a2:
-            st.caption("⏱ Durée estimée : 2-4 minutes (10 sources)")
-
-        if launch_collect:
-            import sys, importlib, subprocess
-            _intel_path = str(__import__('pathlib').Path(db_path).parent)
-            venv_python = str(__import__('pathlib').Path(db_path).parent / "venv" / "bin" / "python3")
-
-            progress_bar = st.progress(0, text="Initialisation…")
-            log_area = st.empty()
-
-            try:
-                proc = subprocess.Popen(
-                    [venv_python, str(__import__('pathlib').Path(db_path).parent / "sarga_claude_intel.py"), "--verbose"],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    cwd=str(__import__('pathlib').Path(db_path).parent),
-                )
-                output_lines = []
-                for i, line in enumerate(proc.stdout):
-                    output_lines.append(line.rstrip())
-                    log_area.code("\n".join(output_lines[-20:]), language="text")
-                    progress_bar.progress(min(i * 5, 95), text=line.strip()[:60])
-                proc.wait()
-                progress_bar.progress(100, text="Collecte terminée !")
-                st.success("Collecte IA terminée ! Rafraîchis la page pour voir les nouvelles observations.")
-            except Exception as _e_proc:
-                st.error(f"Erreur lors de la collecte : {_e_proc}")
-
-        st.divider()
-
-        # Historique des collectes IA
-        if not df_log.empty:
-            st.subheader("Historique des collectes")
-            df_log["date"] = df_log["run_at"].str[:16].str.replace("T", " ")
-            df_log["statut"] = df_log["status"].map({"ok": "✅", "fetch_error": "⚠️", "error": "❌"}).fillna("?") + " " + df_log["status"]
-            st.dataframe(
-                df_log[["date", "source_name", "obs_count", "statut"]],
-                use_container_width=True,
-                hide_index=True,
-                column_config={
-                    "date":        st.column_config.TextColumn("Date"),
-                    "source_name": st.column_config.TextColumn("Source"),
-                    "obs_count":   st.column_config.NumberColumn("Obs."),
-                    "statut":      st.column_config.TextColumn("Statut"),
-                },
-            )
-
     # ── Historique global des observations ────────────────────────────────────
     st.divider()
     st.subheader("Historique complet des observations")
@@ -1379,6 +1165,121 @@ elif page == "Observations":
             },
         )
         st.caption(f"{len(df_show)} observation(s) | 📍 terrain · 🤖 IA · ✍️ manuel")
+
+
+# ── Page Contributeurs : modération comptes + signalements ────────────────────
+
+elif page == "Contributeurs":
+    import contributors_db
+    from pathlib import Path
+
+    contributors_db.init_db(db_path)  # idempotent : garantit l'existence des tables
+
+    st.header("🙋 Contributeurs — modération")
+    st.caption(
+        "Valide d'abord les comptes des bénévoles, puis leurs signalements. "
+        "Un signalement validé est ajouté aux observations terrain "
+        "(source « contributor ») et alimente la calibration."
+    )
+
+    RISK_FR = {"none": "Aucune", "low": "Un peu",
+               "medium": "Moyennement", "high": "Beaucoup"}
+
+    # ── Comptes en attente de validation ─────────────────────────────────────
+    st.subheader("👤 Comptes à valider")
+    pending_accounts = contributors_db.list_pending_accounts(db_path)
+    if not pending_accounts:
+        st.info("Aucun compte en attente.")
+    else:
+        for acc in pending_accounts:
+            with st.container(border=True):
+                c1, c2, c3 = st.columns([4, 1, 1])
+                c1.markdown(f"**{acc['display_name']}** &nbsp; `{acc['username']}`")
+                c1.caption(f"Inscrit le {acc['created_at'][:16].replace('T', ' ')}")
+                if c2.button("✅ Activer", key=f"acc_ok_{acc['id']}", width="stretch"):
+                    contributors_db.set_account_status(
+                        acc["id"], contributors_db.ACCOUNT_ACTIVE, db_path)
+                    st.rerun()
+                if c3.button("✗ Refuser", key=f"acc_no_{acc['id']}", width="stretch"):
+                    contributors_db.set_account_status(
+                        acc["id"], contributors_db.ACCOUNT_REJECTED, db_path)
+                    st.rerun()
+
+    st.divider()
+
+    # ── Signalements en attente de modération ────────────────────────────────
+    st.subheader("📍 Signalements à valider")
+    pending_obs = contributors_db.list_pending_observations(db_path)
+    if not pending_obs:
+        st.info("Aucun signalement en attente.")
+    else:
+        for o in pending_obs:
+            with st.container(border=True):
+                c1, c2, c3 = st.columns([4, 1, 1])
+                cov = f" · {o['coverage_pct']} %" if o["coverage_pct"] is not None else ""
+                c1.markdown(
+                    f"**{o['beach_name'].replace('_', ' ')}** — "
+                    f"{RISK_FR.get(o['observed_risk'], o['observed_risk'])}{cov}"
+                )
+                note_txt = f" · 📝 {o['notes']}" if o["notes"] else ""
+                c1.caption(
+                    f"par {o['display_name']} · observé "
+                    f"{o['observed_at'][:16].replace('T', ' ')}{note_txt}"
+                )
+                # Photo jointe : affichée en local (le dashboard tourne sur le
+                # serveur, cwd = /opt/sargassum, photo_path est relatif).
+                photo = o.get("photo_path")
+                if photo and Path(photo).exists():
+                    c1.image(photo, width=320)
+                if c2.button("✅ Valider", key=f"obs_ok_{o['id']}", width="stretch"):
+                    contributors_db.approve_observation(o["id"], db_path)
+                    st.rerun()
+                if c3.button("✗ Rejeter", key=f"obs_no_{o['id']}", width="stretch"):
+                    contributors_db.reject_observation(o["id"], db_path)
+                    st.rerun()
+
+    st.divider()
+
+    # ── Vue d'ensemble + gestion (confiance / bannissement) ──────────────────
+    with st.expander("Tous les contributeurs"):
+        accounts = contributors_db.list_accounts(db_path)
+        if not accounts:
+            st.caption("Aucun contributeur pour l'instant.")
+        else:
+            df_contrib = pd.DataFrame(accounts)[
+                ["id", "display_name", "username", "status",
+                 "is_trusted", "obs_count", "created_at", "last_login_at"]
+            ]
+            st.dataframe(df_contrib, width="stretch", hide_index=True)
+
+            ids = [a["id"] for a in accounts]
+            sel_id = st.selectbox(
+                "Gérer un compte", ids,
+                format_func=lambda i: next(
+                    (f"{a['display_name']} ({a['username']})"
+                     for a in accounts if a["id"] == i), str(i)),
+            )
+            acc = next((a for a in accounts if a["id"] == sel_id), None)
+            if acc:
+                colA, colB = st.columns(2)
+                if acc["is_trusted"]:
+                    if colA.button("Retirer la confiance", width="stretch"):
+                        contributors_db.set_trusted(acc["id"], False, db_path)
+                        st.rerun()
+                else:
+                    if colA.button("Marquer « de confiance »", width="stretch"):
+                        contributors_db.set_trusted(acc["id"], True, db_path)
+                        st.rerun()
+                if acc["status"] == contributors_db.ACCOUNT_BANNED:
+                    if colB.button("Réactiver le compte", width="stretch"):
+                        contributors_db.set_account_status(
+                            acc["id"], contributors_db.ACCOUNT_ACTIVE, db_path)
+                        st.rerun()
+                else:
+                    if colB.button("🚫 Bannir", width="stretch"):
+                        contributors_db.set_account_status(
+                            acc["id"], contributors_db.ACCOUNT_BANNED, db_path)
+                        st.rerun()
 
 
 # ── Page 7 : Calibration prédit vs observé ────────────────────────────────────

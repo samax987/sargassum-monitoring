@@ -1,0 +1,60 @@
+{% extends "contrib_base.html" %}
+{% block title %}{{ t.obs_title }}{% endblock %}
+{% block content %}
+  <h1>{{ t.obs_title }}</h1>
+  <p class="lead">{{ t.obs_lead }}</p>
+
+  {% if ok %}
+    <div class="alert ok">
+      {{ t.obs_success_pre }}
+      <a href="{{ url_for('contrib.my_observations') }}">{{ t.obs_success_link }}</a>.
+    </div>
+  {% endif %}
+  {% if error %}<div class="alert error">{{ error }}</div>{% endif %}
+
+  <div class="card">
+    <form method="post" action="{{ url_for('contrib.submit_observation') }}"
+          enctype="multipart/form-data">
+      <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+
+      <label for="beach_name">{{ t.obs_beach_label }}</label>
+      <select id="beach_name" name="beach_name" required>
+        <option value="" disabled selected>{{ t.obs_beach_placeholder }}</option>
+        {% for b in beaches %}
+          <option value="{{ b }}">{{ b.replace('_', ' ') }}</option>
+        {% endfor %}
+      </select>
+
+      <label>{{ t.obs_risk_label }}</label>
+      <div class="risk-list">
+        {% for key, label in t.risk_options %}
+          <label class="risk-opt">
+            <input type="radio" name="observed_risk" value="{{ key }}" required>
+            <span>{{ label }}</span>
+          </label>
+        {% endfor %}
+      </div>
+
+      <label for="coverage_pct">{{ t.obs_coverage_label }}
+        <span class="opt">{{ t.obs_coverage_hint }}</span></label>
+      <input type="number" id="coverage_pct" name="coverage_pct" min="0" max="100" step="5"
+             inputmode="numeric" placeholder="{{ t.obs_coverage_ph }}">
+
+      <label for="observed_at">{{ t.obs_datetime_label }}</label>
+      <input type="datetime-local" id="observed_at" name="observed_at" value="{{ now_local }}">
+
+      <label for="photo">{{ t.obs_photo_label }}
+        <span class="opt">{{ t.obs_photo_hint }}</span></label>
+      <!-- capture="environment" : sur mobile, propose directement l'appareil photo -->
+      <input type="file" id="photo" name="photo" accept="image/*" capture="environment">
+
+      <label for="notes">{{ t.obs_notes_label }} <span class="opt">{{ t.obs_notes_hint }}</span></label>
+      <textarea id="notes" name="notes" maxlength="500"
+                placeholder="{{ t.obs_notes_ph }}"></textarea>
+
+      <div class="btn-row">
+        <button class="btn block" type="submit">{{ t.btn_submit_obs }}</button>
+      </div>
+    </form>
+  </div>
+{% endblock %}

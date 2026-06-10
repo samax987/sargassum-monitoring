@@ -1,0 +1,46 @@
+{% extends "contrib_base.html" %}
+{% block title %}{{ t.reg_title }}{% endblock %}
+{% block content %}
+  <h1>{{ t.reg_title }}</h1>
+
+  {% if registered %}
+    <div class="alert ok">{{ t.reg_success }}</div>
+    <div class="btn-row">
+      <a class="btn ghost" href="{{ url_for('contrib.home') }}">{{ t.btn_back_home }}</a>
+    </div>
+  {% else %}
+    {% if error %}<div class="alert error">{{ error }}</div>{% endif %}
+    <div class="card">
+      <form method="post" action="{{ url_for('contrib.register') }}" autocomplete="off">
+        <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+
+        <label for="username">{{ t.reg_username_label }}
+          <span class="opt">{{ t.reg_username_hint }}</span></label>
+        <input type="text" id="username" name="username" required
+               value="{{ username or '' }}" autocapitalize="none" spellcheck="false">
+
+        <label for="display_name">{{ t.reg_name_label }}
+          <span class="opt">{{ t.reg_name_hint }}</span></label>
+        <input type="text" id="display_name" name="display_name" required
+               maxlength="40" value="{{ display_name or '' }}">
+
+        <label for="password">{{ t.reg_pw_label }} <span class="opt">{{ t.reg_pw_hint }}</span></label>
+        <input type="password" id="password" name="password" required minlength="8">
+
+        <label for="password2">{{ t.reg_pw2_label }}</label>
+        <input type="password" id="password2" name="password2" required minlength="8">
+
+        <!-- Champ piège anti-robot : laisse-le vide -->
+        <div class="hp" aria-hidden="true">
+          <label for="website">{{ t.hp_label }}</label>
+          <input type="text" id="website" name="website" tabindex="-1" autocomplete="off">
+        </div>
+
+        <div class="btn-row">
+          <button class="btn block" type="submit">{{ t.btn_create_account }}</button>
+        </div>
+      </form>
+    </div>
+    <p class="lead">{{ t.reg_have_account }} <a href="{{ url_for('contrib.login') }}">{{ t.login_title }}</a></p>
+  {% endif %}
+{% endblock %}

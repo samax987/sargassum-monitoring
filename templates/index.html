@@ -1,10 +1,10 @@
 <!DOCTYPE html>
-<html lang="fr">
+<html lang="{{ t.html_lang }}">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Sargasses Saint-Barthélemy — Suivi temps réel</title>
-    <meta name="description" content="Suivi temps réel des sargasses sur les plages de Saint-Barthélemy. Risque d'échouage sur 5 jours, données satellite et modèle OpenDrift.">
+    <title>{{ t.page_title }}</title>
+    <meta name="description" content="{{ t.page_desc }}">
 
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -413,19 +413,27 @@
     <header>
         <div>
             <h1>🌊 Sargasses Saint-Barthélemy</h1>
-            <div class="subtitle">Suivi temps réel · Modèle OpenDrift 5 jours</div>
+            <div class="subtitle">{{ t.subtitle }}</div>
         </div>
-        <div id="system-status" class="status-pill">
-            <span>•</span><span id="status-text">Vérification...</span>
+        <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap">
+            <a href="{{ url_for('contrib.home') }}" style="padding:6px 14px; border-radius:20px; font-size:0.78em; font-weight:600; background:rgba(45,212,191,0.15); color:#2dd4bf; border:1px solid rgba(45,212,191,0.35); text-decoration:none">{{ t.contribute }}</a>
+            <div id="system-status" class="status-pill">
+                <span>•</span><span id="status-text">{{ t.checking }}</span>
+            </div>
+            <span class="langsw" style="font-size:0.78em;display:flex;gap:6px;align-items:center">
+                <a href="?lang=fr" style="text-decoration:none;color:{{ '#ffffff' if lang == 'fr' else '#a0a8c0' }};font-weight:{{ '700' if lang == 'fr' else '400' }}">FR</a>
+                <span style="color:#6c7a99">·</span>
+                <a href="?lang=en" style="text-decoration:none;color:{{ '#ffffff' if lang == 'en' else '#a0a8c0' }};font-weight:{{ '700' if lang == 'en' else '400' }}">EN</a>
+            </span>
         </div>
     </header>
 
     <div id="app">
         <aside id="sidebar">
             <div class="section">
-                <h2>Horizon de prévision</h2>
+                <h2>{{ t.h_horizon }}</h2>
                 <div class="time-control">
-                    <button class="time-btn active" data-day="0">Aujourd'hui</button>
+                    <button class="time-btn active" data-day="0">{{ t.today }}</button>
                     <button class="time-btn" data-day="1">J+1</button>
                     <button class="time-btn" data-day="2">J+2</button>
                     <button class="time-btn" data-day="3">J+3</button>
@@ -433,43 +441,43 @@
                 </div>
                 <div class="hour-control">
                     <div class="hour-row">
-                        <button id="play-btn" title="Lancer l'animation">▶</button>
+                        <button id="play-btn" title="{{ t.play_title }}">▶</button>
                         <input type="range" id="hour-slider" min="0" max="120" step="3" value="0">
                     </div>
-                    <div class="hour-label" id="hour-label">Aujourd'hui · +0h</div>
+                    <div class="hour-label" id="hour-label">{{ t.today }} · +0h</div>
                     <div class="speed-row">
-                        <span>Vitesse</span>
+                        <span>{{ t.speed }}</span>
                         <button class="speed-btn active" data-speed="1">×1</button>
                         <button class="speed-btn" data-speed="2">×2</button>
                     </div>
-                    <button id="region-btn" title="Voir le champ de sargasses approcher">🌊 Vue régionale</button>
-                    <p class="drift-hint">🟠 Points pâles = positions passées · vifs = position prévue à l'heure choisie.</p>
+                    <button id="region-btn" title="{{ t.region_btn_title }}">{{ t.region_view }}</button>
+                    <p class="drift-hint">{{ t.drift_hint }}</p>
                 </div>
             </div>
 
             <div class="section">
-                <h2>Conditions actuelles</h2>
+                <h2>{{ t.h_conditions }}</h2>
                 <div class="weather-card" id="weather-card">
                     <div class="weather-item">
                         <div class="weather-icon">💨</div>
                         <div class="weather-value" id="w-wind">—</div>
-                        <div class="weather-label">Vent</div>
+                        <div class="weather-label">{{ t.w_wind }}</div>
                     </div>
                     <div class="weather-item">
                         <div class="weather-icon">🌊</div>
                         <div class="weather-value" id="w-swell">—</div>
-                        <div class="weather-label">Houle</div>
+                        <div class="weather-label">{{ t.w_swell }}</div>
                     </div>
                     <div class="weather-item">
                         <div class="weather-icon">🌡️</div>
                         <div class="weather-value" id="w-temp">—</div>
-                        <div class="weather-label">Eau</div>
+                        <div class="weather-label">{{ t.w_water }}</div>
                     </div>
                 </div>
 
                 <div class="forecast-3d" id="forecast-3d">
                     <div class="forecast-day" data-day="0">
-                        <div class="forecast-label">Aujourd'hui</div>
+                        <div class="forecast-label">{{ t.today }}</div>
                         <div class="forecast-meta">
                             <span class="forecast-wind">— kn</span>
                             <span class="forecast-swell">— m</span>
@@ -477,7 +485,7 @@
                         <div class="forecast-bar" style="--level: 0%"></div>
                     </div>
                     <div class="forecast-day" data-day="1">
-                        <div class="forecast-label">Demain</div>
+                        <div class="forecast-label">{{ t.tomorrow }}</div>
                         <div class="forecast-meta">
                             <span class="forecast-wind">— kn</span>
                             <span class="forecast-swell">— m</span>
@@ -496,7 +504,7 @@
             </div>
 
             <div class="section">
-                <h2>Plages SBH</h2>
+                <h2>{{ t.h_beaches }}</h2>
                 <div id="beaches-list" class="loading">
                     <div class="skeleton" style="height:80px;margin-bottom:8px;"></div>
                     <div class="skeleton" style="height:80px;margin-bottom:8px;"></div>
@@ -505,30 +513,30 @@
             </div>
 
             <div class="section">
-                <h2>Heure d'arrivée prévue · 48h</h2>
+                <h2>{{ t.h_arrival }}</h2>
                 <div id="timeline-list" class="loading">
                     <div class="skeleton" style="height:48px;margin-bottom:8px;"></div>
                     <div class="skeleton" style="height:48px;"></div>
                 </div>
                 <div style="font-size:11px;color:#9ca3af;margin-top:6px;">
-                    Résolution 3h · 1er passage au risque ≥ moyen
+                    {{ t.arrival_note }}
                 </div>
             </div>
 
             <div class="section">
-                <h2>Alertes Telegram</h2>
+                <h2>{{ t.h_alerts }}</h2>
                 <div class="subscribe-box">
                     <select id="subscribe-beach">
-                        <option value="">Choisir une plage...</option>
+                        <option value="">{{ t.choose_beach }}</option>
                     </select>
-                    <button id="subscribe-btn">M'abonner via Telegram</button>
+                    <button id="subscribe-btn">{{ t.subscribe_btn }}</button>
                     <div id="subscribe-result" class="subscribe-result"></div>
                 </div>
             </div>
 
             <div class="footer-links">
-                Sources : AVISO+, Copernicus Marine, NOAA, OpenDrift<br>
-                <a href="/dashboard" target="_blank">Dashboard technique →</a>
+                {{ t.sources }}<br>
+                <a href="/dashboard" target="_blank">{{ t.dashboard_link }}</a>
             </div>
         </aside>
 
@@ -538,6 +546,7 @@
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" nonce="{{ csp_nonce }}"></script>
     <script nonce="{{ csp_nonce }}">
+        const I18N = {{ t|tojson }};
         const SBH_CENTER = [17.9, -62.83];
         // Boîte régionale (Petites Antilles autour de SBH) pour la vue dérive
         const REGION_BOUNDS = L.latLngBounds([16.0, -65.5], [19.6, -60.3]);
@@ -575,14 +584,14 @@
         legend.onAdd = function () {
             const div = L.DomUtil.create('div', 'legend');
             div.innerHTML = `
-                <button class="legend-toggle" type="button" aria-label="Afficher/masquer la légende">ⓘ</button>
+                <button class="legend-toggle" type="button" aria-label="${I18N.legend_aria}">ⓘ</button>
                 <div class="legend-body">
-                  <strong>Risque d'échouage</strong>
-                  <div class="legend-row"><span class="legend-dot" style="background:#22c55e"></span>Aucun</div>
-                  <div class="legend-row"><span class="legend-dot" style="background:#eab308"></span>Faible</div>
-                  <div class="legend-row"><span class="legend-dot" style="background:#f97316"></span>Moyen</div>
-                  <div class="legend-row"><span class="legend-dot" style="background:#ef4444"></span>Fort</div>
-                  <small>Score régional σ = 50 km</small>
+                  <strong>${I18N.legend_title}</strong>
+                  <div class="legend-row"><span class="legend-dot" style="background:#22c55e"></span>${I18N.risk.none}</div>
+                  <div class="legend-row"><span class="legend-dot" style="background:#eab308"></span>${I18N.risk.low}</div>
+                  <div class="legend-row"><span class="legend-dot" style="background:#f97316"></span>${I18N.risk.medium}</div>
+                  <div class="legend-row"><span class="legend-dot" style="background:#ef4444"></span>${I18N.risk.high}</div>
+                  <small>${I18N.legend_note}</small>
                 </div>
             `;
             L.DomEvent.disableClickPropagation(div);
@@ -630,9 +639,9 @@
             const marker = L.marker([beach.lat, beach.lon], { icon });
             marker.bindPopup(`
                 <strong>${beach.name.replace(/_/g, ' ')}</strong><br>
-                Risque J+${day} : <span style="color:${color};font-weight:600">${dayData.label}</span><br>
-                Score régional : ${dayData.regional_score}<br>
-                Particule la plus proche : <strong>${dayData.closest_km} km</strong>
+                ${I18N.popup_risk} J+${day} : <span style="color:${color};font-weight:600">${I18N.risk[level]}</span><br>
+                ${I18N.popup_score} : ${dayData.regional_score}<br>
+                ${I18N.popup_closest} : <strong>${dayData.closest_km} km</strong>
             `);
             return marker;
         }
@@ -648,7 +657,7 @@
                 updateMap();
             } catch (e) {
                 document.getElementById('beaches-list').innerHTML =
-                    '<div style="color:#ef4444;padding:20px;text-align:center">Erreur de chargement</div>';
+                    `<div style="color:#ef4444;padding:20px;text-align:center">${I18N.load_error}</div>`;
             }
         }
 
@@ -680,13 +689,13 @@
 
         // Libellé du curseur : jour + date/heure locale SBH (UTC-4) complète si t0 connu
         function updateHourLabel(hour, simStart) {
-            const dayLabel = hour < 24 ? "Aujourd'hui" : (hour < 48 ? 'Demain' : `J+${Math.floor(hour / 24)}`);
+            const dayLabel = hour < 24 ? I18N.today : (hour < 48 ? I18N.tomorrow : `J+${Math.floor(hour / 24)}`);
             let suffix = `+${hour}h`;
             if (simStart) {
                 const t0 = new Date(simStart.endsWith('Z') ? simStart : simStart + 'Z');
                 // On décale de -4h (heure locale SBH) puis on formate en UTC (offset déjà appliqué)
                 const local = new Date(t0.getTime() + hour * 3600 * 1000 - 4 * 3600 * 1000);
-                suffix = local.toLocaleString('fr-FR', {
+                suffix = local.toLocaleString(I18N.locale, {
                     weekday: 'short', day: 'numeric', month: 'short',
                     hour: '2-digit', minute: '2-digit', timeZone: 'UTC',
                 });
@@ -709,14 +718,14 @@
                 const pill = document.getElementById('system-status');
                 const text = document.getElementById('status-text');
                 if (data.status === 'ok') {
-                    text.textContent = 'Système opérationnel';
+                    text.textContent = I18N.health_ok;
                     pill.className = 'status-pill';
                 } else {
-                    text.textContent = data.failures || 'Problème détecté';
+                    text.textContent = data.failures || I18N.health_problem;
                     pill.className = 'status-pill fail';
                 }
             } catch (e) {
-                document.getElementById('status-text').textContent = 'Statut inconnu';
+                document.getElementById('status-text').textContent = I18N.health_unknown;
             }
         }
 
@@ -777,7 +786,7 @@
         }
 
         function degToCompass(deg) {
-            const dirs = ['N','NE','E','SE','S','SO','O','NO'];
+            const dirs = I18N.compass;
             return dirs[Math.round(deg / 45) % 8];
         }
 
@@ -797,13 +806,13 @@
 
                 const days = beach.forecast.slice(0, 5);
                 const dots = days.map(d =>
-                    `<div class="day-dot" style="background:${d.color}" title="J+${d.day_offset}: ${d.label}"></div>`
+                    `<div class="day-dot" style="background:${d.color}" title="J+${d.day_offset}: ${I18N.risk[d.risk_level]}"></div>`
                 ).join('');
 
                 card.innerHTML = `
                     <div class="beach-header">
                         <div class="beach-name">${beach.name.replace(/_/g, ' ')}</div>
-                        <span class="beach-pill" style="background:${beach.worst_3d_color}">${beach.worst_3d_label}</span>
+                        <span class="beach-pill" style="background:${beach.worst_3d_color}">${I18N.risk[beach.worst_3d]}</span>
                     </div>
                     <div class="forecast-strip">${dots}</div>
                     <div class="day-labels">
@@ -888,7 +897,7 @@
             regionalView = on;
             const btn = document.getElementById('region-btn');
             btn.classList.toggle('active', on);
-            btn.textContent = on ? '🏝️ Vue île' : '🌊 Vue régionale';
+            btn.textContent = on ? I18N.island_view : I18N.region_view;
             if (on) map.fitBounds(REGION_BOUNDS, { padding: [20, 20] });
             else map.setView(SBH_CENTER, 13);
             updateMap();   // re-filtre/redessine la dérive selon la vue
@@ -900,7 +909,7 @@
             clearInterval(playTimer);
             playTimer = null;
             document.getElementById('play-btn').textContent = '▶';
-            document.getElementById('play-btn').title = "Lancer l'animation";
+            document.getElementById('play-btn').title = I18N.play_title;
         }
 
         // Message éphémère en bas de carte (auto-disparition après 3,5 s)
@@ -916,11 +925,11 @@
         function startPlay() {
             const btn = document.getElementById('play-btn');
             btn.textContent = '❚❚';
-            btn.title = "Mettre en pause";
+            btn.title = I18N.pause_title;
             // Bascule en vue régionale : sinon le mouvement est invisible (vue île trop serrée)
             if (!regionalView) {
                 setRegionalView(true);
-                showToast("🌊 Vue régionale : suivez le champ de sargasses approcher des îles");
+                showToast(I18N.toast_regional);
             }
             // Si on est à la fin, on repart du début
             if (currentHour >= PLAY_MAX) currentHour = 0;
@@ -950,7 +959,7 @@
         // === Subscribe ===
         function populateSubscribeDropdown(beaches) {
             const sel = document.getElementById('subscribe-beach');
-            sel.innerHTML = '<option value="">Choisir une plage...</option>';
+            sel.innerHTML = `<option value="">${I18N.choose_beach}</option>`;
             beaches.forEach(b => {
                 const opt = document.createElement('option');
                 opt.value = b.name;
@@ -964,7 +973,7 @@
 
         async function subscribeToBeach() {
             const beach = document.getElementById('subscribe-beach').value;
-            if (!beach) { alert('Choisis une plage'); return; }
+            if (!beach) { alert(I18N.alert_choose); return; }
             const res = await fetch('/api/subscribe', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -973,22 +982,22 @@
             const data = await res.json();
             const resultDiv = document.getElementById('subscribe-result');
             resultDiv.style.display = 'block';
-            resultDiv.innerHTML = `<a href="${data.telegram_link}" target="_blank">→ Ouvrir Telegram et m'abonner à ${beach.replace(/_/g, ' ')}</a>`;
+            resultDiv.innerHTML = `<a href="${data.telegram_link}" target="_blank">${I18N.subscribe_open}${beach.replace(/_/g, ' ')}</a>`;
         }
 
         // === Timeline horaire (résolution 3h) ===
         function formatArrival(beach) {
             if (beach.arrival_hour === null || beach.arrival_hour === undefined) {
-                return { text: 'Aucun risque ≥ moyen sur 48h', cls: 'none' };
+                return { text: I18N.arrival_none, cls: 'none' };
             }
             const h = beach.arrival_hour;
-            const dayLabel = h < 24 ? "aujourd'hui" : (h < 48 ? 'demain' : `J+${Math.floor(h / 24)}`);
+            const dayLabel = h < 24 ? I18N.today_low : (h < 48 ? I18N.tomorrow_low : `J+${Math.floor(h / 24)}`);
             let hourLabel = '';
             if (beach.arrival_time) {
                 // valid_time est en UTC ISO ; afficher l'heure locale SBH (UTC-4)
                 const d = new Date(beach.arrival_time);
                 const local = new Date(d.getTime() - 4 * 3600 * 1000);
-                hourLabel = ` ${String(local.getUTCHours()).padStart(2, '0')}h`;
+                hourLabel = ` ${String(local.getUTCHours()).padStart(2, '0')}${I18N.hour_suffix}`;
             }
             return { text: `${dayLabel}${hourLabel} (≈ +${h}h)`, cls: 'risk' };
         }
@@ -1006,7 +1015,7 @@
             const container = document.getElementById('timeline-list');
             container.className = '';
             if (!beaches.length) {
-                container.innerHTML = '<div style="color:#9ca3af;padding:10px">Timeline indisponible (prochaine simulation).</div>';
+                container.innerHTML = `<div style="color:#9ca3af;padding:10px">${I18N.timeline_unavailable}</div>`;
                 return;
             }
             // Plages avec une arrivée d'abord, triées par heure d'arrivée croissante

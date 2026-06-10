@@ -21,19 +21,24 @@ Endpoints
 
 import json
 import logging
+import os
 import secrets
 import sqlite3
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from flask import Flask, g, jsonify, render_template, request, redirect
+from flask import Flask, g, jsonify, render_template, request, redirect, session
+from werkzeug.middleware.proxy_fix import ProxyFix
 
-# Permet d'importer beaches_db et sargassum_admin_routes
+# Permet d'importer beaches_db, contributors_db et les modules de routes
 sys.path.insert(0, str(Path(__file__).parent))
 
 import beaches_db
+import contributors_db
+import contrib_i18n
 from sargassum_admin_routes import register_admin_routes
+from sargassum_contributor_routes import register_contributor_routes
 
 logger = logging.getLogger(__name__)
 
@@ -43,10 +48,53 @@ DB_PATH = Path(__file__).parent / "sargassum_data.db"
 ISLAND = "Saint-Barth"
 DASHBOARD_URL = "http://45.55.239.73:8501"
 
+
+def _load_env_value(key: str, default: str = "") -> str:
+    """Lit une clé depuis .env (lecture manuelle, comme le reste du projet)."""
+    env_path = Path(__file__).parent / ".env"
+    if env_path.exists():
+        for line in env_path.read_text().splitlines():
+            line = line.strip()
+            if line.startswith(f"{key}="):
+                return line.split("=", 1)[1].strip()
+    return os.environ.get(key, default)
+
+
 app = Flask(__name__, template_folder=str(Path(__file__).parent / "templates"))
+
+# Derrière nginx (+ Cloudflare) : restaure la vraie IP/proto/hôte du client,
+# nécessaire au rate-limiting par IP du portail contributeurs.
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
+
+# Clé de signature des sessions (cookies signés). DOIT être stable et partagée
+# entre les workers gunicorn → chargée depuis .env. Sans elle, les sessions ne
+# survivraient ni à un redémarrage ni au passage d'un worker à l'autre.
+app.secret_key = _load_env_value("FLASK_SECRET_KEY")
+if not app.secret_key:
+    app.secret_key = secrets.token_hex(32)
+    logger.warning(
+        "FLASK_SECRET_KEY absente du .env : cle ephemere generee. "
+        "Ajoute FLASK_SECRET_KEY dans .env en production."
+    )
+
+# Cookies de session sécurisés (site servi exclusivement en HTTPS).
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+    SESSION_COOKIE_SECURE=True,
+    PERMANENT_SESSION_LIFETIME=timedelta(days=30),
+    # Plafond des requêtes entrantes (photos des signalements). Au-delà,
+    # Werkzeug lève RequestEntityTooLarge → message propre côté portail.
+    # Doit rester cohérent avec client_max_body_size côté nginx.
+    MAX_CONTENT_LENGTH=12 * 1024 * 1024,
+)
 
 # Enregistre les routes admin et stats
 register_admin_routes(app)
+
+# Portail contributeurs (bénévoles) : crée les tables au besoin + routes
+contributors_db.init_db()
+register_contributor_routes(app)
 
 
 # ── Sécurité : en-têtes HTTP (défense en profondeur) ────────────────────────────
@@ -128,7 +176,9 @@ def index():
     """
     nonce = secrets.token_urlsafe(16)
     g.csp_nonce = nonce
-    return render_template('index.html', dashboard_url=DASHBOARD_URL, csp_nonce=nonce)
+    lang = contrib_i18n.current_lang()
+    return render_template('index.html', dashboard_url=DASHBOARD_URL, csp_nonce=nonce,
+                           t=contrib_i18n.get_map_strings(lang), lang=lang)
 
 
 @app.route('/dashboard')

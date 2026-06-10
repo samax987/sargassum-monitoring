@@ -29,8 +29,15 @@ captures/
 # Backups
 *.bak
 *.bak2
+*.bak-*
 *.before_wind
 cron.log.*
 venv/
 .claude/
 .claudeignore
+
+# Logs runtime (web_access.log, healthcheck.log, …)
+logs/
+
+# Photos des signalements contributeurs (donnees, pas du code)
+contrib_photos/

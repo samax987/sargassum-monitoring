@@ -1,0 +1,55 @@
+{% extends "contrib_base.html" %}
+{% block title %}{{ t.my_title }}{% endblock %}
+{% block content %}
+  <h1>{{ t.my_title }}</h1>
+  <p class="lead">
+    {{ observations|length }} {{ t.my_sent }} ·
+    {{ contributor.obs_count }} {{ t.my_approved }}
+  </p>
+
+  {% if not observations %}
+    <div class="alert info">
+      {{ t.my_empty_pre }}
+      <a href="{{ url_for('contrib.observer') }}">{{ t.my_empty_link }}</a>
+    </div>
+  {% else %}
+    <div class="card" style="overflow-x:auto">
+      <table>
+        <thead>
+          <tr>
+            <th>{{ t.col_date }}</th><th>{{ t.col_beach }}</th><th>{{ t.col_sarg }}</th>
+            <th>{{ t.col_cov }}</th><th>{{ t.col_photo }}</th><th>{{ t.col_status }}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for o in observations %}
+            <tr>
+              <td>{{ o.observed_at.replace('T', ' ')[:16] }}</td>
+              <td>{{ o.beach_name.replace('_', ' ') }}</td>
+              <td>{{ t.risk_map.get(o.observed_risk, o.observed_risk) }}</td>
+              <td>{{ o.coverage_pct if o.coverage_pct is not none else '—' }}{% if o.coverage_pct is not none %}&nbsp;%{% endif %}</td>
+              <td>
+                {% if o.photo_path %}
+                  <a href="{{ url_for('contrib.photo', obs_id=o.id) }}" target="_blank">{{ t.photo_view }}</a>
+                {% else %}—{% endif %}
+              </td>
+              <td>
+                {% if o.status == 'approved' %}
+                  <span class="badge approved">{{ t.status_approved }}</span>
+                {% elif o.status == 'rejected' %}
+                  <span class="badge rejected">{{ t.status_rejected }}</span>
+                {% else %}
+                  <span class="badge pending">{{ t.status_pending }}</span>
+                {% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% endif %}
+
+  <div class="btn-row">
+    <a class="btn" href="{{ url_for('contrib.observer') }}">{{ t.btn_new_report }}</a>
+  </div>
+{% endblock %}

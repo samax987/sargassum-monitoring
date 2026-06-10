@@ -1,0 +1,27 @@
+{% extends "contrib_base.html" %}
+{% block title %}{{ t.login_title }}{% endblock %}
+{% block content %}
+  <h1>{{ t.login_title }}</h1>
+
+  {% if error %}<div class="alert error">{{ error }}</div>{% endif %}
+
+  <div class="card">
+    <form method="post" action="{{ url_for('contrib.login') }}">
+      <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+
+      <label for="username">{{ t.login_username }}</label>
+      <input type="text" id="username" name="username" required
+             value="{{ username or '' }}" autocapitalize="none" spellcheck="false">
+
+      <label for="password">{{ t.login_pw }}</label>
+      <input type="password" id="password" name="password" required>
+
+      <div class="btn-row">
+        <button class="btn block" type="submit">{{ t.btn_login }}</button>
+      </div>
+    </form>
+  </div>
+
+  <p class="lead">{{ t.login_no_account }}
+    <a href="{{ url_for('contrib.register') }}">{{ t.login_create_link }}</a></p>
+{% endblock %}

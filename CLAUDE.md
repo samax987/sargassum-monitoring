@@ -5,10 +5,14 @@ Instructions pour Claude Code sur ce projet. Lis ce fichier avant toute modifica
 ## Contexte du projet
 
 Système de surveillance automatisée des échouages de sargasses aux Antilles françaises.
-Déployé sur VPS `45.55.239.73`, dashboard accessible sur `http://45.55.239.73:8501`.
+Déployé sur VPS `45.55.239.73`. Site public : `https://sargassum.villasuite.app` (bilingue
+FR/EN). Dashboard admin : `https://sargassum.villasuite.app/dashboard/` (Basic Auth nginx,
+user `sam`, mot de passe = `ADMIN_PASSWORD` du `.env` — ne JAMAIS retirer cette auth).
 
 Le projet vise le **"dernier kilomètre"** : combiner données satellites/océanographiques
 avec des observations terrain réelles pour produire des alertes précises au niveau de la plage.
+Les observations terrain viennent de Sam (dashboard) ET de bénévoles via le portail
+public `/contribuer` (voir section Portail contributeurs).
 
 ---
 
@@ -18,22 +22,34 @@ avec des observations terrain réelles pour produire des alertes précises au ni
 /opt/sargassum/
 ├── sargassum_collector.py      # Collecte 6 sources + simulation OpenDrift
 ├── beaches.py                  # Scoring gaussien par plage (local + régional)
+├── beaches_db.py               # Table beaches_config (source des plages, gérée via /admin)
 ├── sargassum_alert.py          # Alertes Telegram anti-spam
-├── sargassum_dashboard.py      # Dashboard Streamlit 7 pages
+├── sargassum_alert_subscribers.py # Alertes par plage pour les abonnés du bot
+├── sargassum_bot.py            # Bot Telegram (abonnements)
+├── sargassum_web.py            # Site public Flask (carte bilingue + API JSON)
+├── sargassum_admin_routes.py   # /admin gestion plages (Basic Auth durcie)
+├── sargassum_contributor_routes.py # Portail bénévoles /contribuer (blueprint)
+├── contributors_db.py          # Comptes bénévoles + file de modération
+├── contrib_i18n.py             # Traductions FR/EN (portail + carte publique)
+├── sargassum_dashboard.py      # Dashboard Streamlit 8 pages
+├── sargassum_healthcheck.py    # Surveillance pipeline (cron horaire)
 ├── sargassum_webcam_capture.py # Captures webcams automatiques
 ├── sarga_news_scraper.py       # Scraping news caribéennes + calibration
 ├── sarga_claude_intel.py       # Collecteur IA (Claude Haiku) — URLs + texte + web
-├── sarga_calibration.py        # Calibration automatique prédit vs observé
+├── sarga_calibration_spatial.py # Calibration spatiale prédit vs observé (cron lundi)
 ├── sargassum_run_linux.sh      # Pipeline cron complet
-├── test_beaches.py             # 31 tests unitaires beaches.py
-├── test_alert.py               # 26 tests unitaires sargassum_alert.py
+├── test_beaches.py             # Tests unitaires beaches.py
+├── test_alert.py               # Tests unitaires sargassum_alert.py
+├── test_contributors.py        # Tests unitaires portail (couche DB, base temporaire)
+├── templates/                  # index (carte), stats, admin, contrib_*
+├── contrib_photos/             # Photos signalements (jamais committer)
 ├── requirements.txt            # Dépendances figées
 └── .env                        # Secrets (jamais committer)
 ```
 
 ### Base de données SQLite (`sargassum_data.db`)
 
-13 tables :
+25 tables. Les principales :
 
 | Table | Contenu |
 |---|---|
@@ -52,6 +68,12 @@ avec des observations terrain réelles pour produire des alertes précises au ni
 | `claude_intel_log` | Logs des collectes Claude Haiku |
 | `calibration_matches` | Matchs obs. terrain ↔ prédictions |
 | `calibration_bias` | Biais de calibration par île/mois |
+| `calibration_spatial` / `_bias` | Erreur spatiale (km) + biais directionnel — appliqué par beaches.py si n_obs ≥ 3 |
+| `beach_timeline` | Scoring 3h (heure d'arrivée prévue, consommé par /api/timeline) |
+| `beaches_config` | Plages surveillées — SOURCE DE VÉRITÉ (beaches.BEACHES chargé depuis cette table) |
+| `telegram_subscriptions` | Abonnés du bot par plage |
+| `contributors` | Comptes bénévoles (pending/active/rejected/banned) |
+| `contributor_observations` | Signalements bénévoles en modération (photo_path éventuel) |
 
 ---
 
@@ -62,7 +84,7 @@ avec des observations terrain réelles pour produire des alertes précises au ni
 | `0 */6 * * *` | `sargassum_run_linux.sh` | Pipeline complet : collecte + drift + scoring + alerte |
 | `0 7 * * *` | `sarga_news_scraper.py` | Scraping news caribéennes quotidien |
 | `0 8 * * 1` | `sarga_claude_intel.py` | Collecte IA web (Claude Haiku) — chaque lundi |
-| `0 9 * * 1` | `sarga_calibration.py` | Recalibration prédit vs observé — chaque lundi |
+| `0 9 * * 1` | `sarga_calibration_spatial.py` | Recalibration spatiale prédit vs observé — chaque lundi |
 | `0 14 * * *` | `sargassum_webcam_capture.py --once` | Capture webcams |
 
 ---
@@ -77,6 +99,7 @@ avec des observations terrain réelles pour produire des alertes précises au ni
 | **Plages** | Carte risque par île, heatmap scores, tableau détaillé |
 | **Webcams** | Dernières captures + historique 24h |
 | **Observations** | 4 onglets : Terrain / Analyser URL / Analyser texte / Collecte IA |
+| **Contributeurs** | Modération : validation des comptes bénévoles et de leurs signalements (photo affichée) |
 | **Calibration** | Biais prédit vs observé, graphiques, recommandations correction |
 
 ---
@@ -98,7 +121,8 @@ avec des observations terrain réelles pour produire des alertes précises au ni
 ### Dashboard Streamlit
 - Chaque page est un bloc `if page == "..."` ou `elif page == "..."`
 - Toutes les connexions DB passent par `get_connection(db_path)` (défini en tête de fichier)
-- Les DataFrames s'affichent avec `st.dataframe(..., use_container_width=True, hide_index=True)`
+- Les DataFrames s'affichent avec `st.dataframe(..., width="stretch", hide_index=True)`
+  (`use_container_width` est déprécié depuis Streamlit 1.54)
 - Pas de `st.experimental_*` (déprécié)
 
 ### Sécurité
@@ -118,8 +142,30 @@ AVISO_USERNAME=...            # AVISO+ (optionnel, fallback Copernicus)
 AVISO_PASSWORD=...
 TELEGRAM_TOKEN=...            # Bot Telegram (@BotFather)
 TELEGRAM_CHAT=...             # Chat ID pour les alertes
-ANTHROPIC_API_KEY=...         # Claude Haiku (sarga_claude_intel.py + dashboard)
+ADMIN_PASSWORD=...            # /admin Flask + Basic Auth nginx du dashboard
+FLASK_SECRET_KEY=...          # Signature des sessions du portail (64 hex)
 ```
+
+---
+
+## Portail contributeurs (`/contribuer`)
+
+Bénévoles SBH : inscription → compte `pending` → **Sam valide** (dashboard, page
+Contributeurs) → signalements possibles → chaque signalement arrive en file de
+modération → **Sam approuve** → promotion dans `beach_observations`
+(`source='contributor'`) → pris en compte par la calibration.
+
+**Règle d'or : un signalement non approuvé ne doit JAMAIS atteindre
+`beach_observations`** (c'est la table lue par la calibration). La promotion se
+fait uniquement dans `contributors_db.approve_observation()` — ne pas créer
+d'autre chemin d'écriture.
+
+- Bilingue FR/EN : toutes les chaînes UI dans `contrib_i18n.py` (`?lang=` mémorisé en session)
+- Photos : ré-encodées par Pillow (EXIF/GPS supprimés, max 1600 px) dans `contrib_photos/`,
+  servies uniquement à leur auteur via `/contribuer/photo/<id>` ; 12 Mo max
+  (Flask `MAX_CONTENT_LENGTH` + nginx `client_max_body_size`, à garder synchros)
+- Sécurité : sessions signées, CSRF sur les POST du portail uniquement, rate-limit en mémoire
+  (par worker gunicorn → seuil effectif ~2×)
 
 ---
 
@@ -186,8 +232,8 @@ Compare les prédictions `beach_risk_scores` (OpenDrift) aux observations `beach
 
 ```bash
 cd /opt/sargassum
-venv/bin/python3 -m pytest test_beaches.py test_alert.py -v
-# 57 tests, couverture 61%
+venv/bin/python3 -m pytest test_beaches.py test_alert.py test_contributors.py -v
+# 74 tests. test_contributors couvre la garantie de modération du portail.
 ```
 
 ---

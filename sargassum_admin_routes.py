@@ -10,10 +10,14 @@ Ajoute les endpoints :
   POST /admin/api/beaches/<id>/delete  Desactive une plage
   GET  /admin/stats            Page de stats publiques
 
-Auth : HTTP Basic Auth, user = 'sam', password depuis env ADMIN_PASSWORD
+Auth : HTTP Basic Auth, user = 'sam', password depuis env ADMIN_PASSWORD.
+Durci (audit 2026-06-10) : comparaison en temps constant (compare_digest)
++ limitation des tentatives par IP, alignées sur le portail contributeurs.
 """
 
 import os
+import secrets
+import time
 from functools import wraps
 
 from flask import request, jsonify, redirect, render_template, Response
@@ -24,6 +28,12 @@ import beaches_db
 # ── Auth ───────────────────────────────────────────────────────────────────────
 
 ADMIN_USER = 'sam'
+
+# Anti force-brute : 10 echecs / 15 min / IP, puis 429.
+# En memoire process (suffisant : un seul utilisateur legitime).
+AUTH_FAIL_MAX = 10
+AUTH_FAIL_WINDOW_S = 15 * 60
+_auth_failures: dict[str, list[float]] = {}
 
 
 def _load_admin_password() -> str:
@@ -42,17 +52,50 @@ def _load_admin_password() -> str:
 ADMIN_PASSWORD = _load_admin_password()
 
 
+def _client_ip() -> str:
+    """Vraie IP du client derriere nginx/Cloudflare (pour le rate-limit)."""
+    cf = request.headers.get('CF-Connecting-IP')
+    if cf:
+        return cf.strip()
+    xff = request.headers.get('X-Forwarded-For')
+    if xff:
+        return xff.split(',')[0].strip()
+    return request.remote_addr or '?'
+
+
+def _too_many_failures(ip: str) -> bool:
+    now = time.time()
+    fails = [t for t in _auth_failures.get(ip, []) if now - t < AUTH_FAIL_WINDOW_S]
+    _auth_failures[ip] = fails
+    return len(fails) >= AUTH_FAIL_MAX
+
+
+def _record_failure(ip: str) -> None:
+    _auth_failures.setdefault(ip, []).append(time.time())
+
+
 def check_auth(auth) -> bool:
-    if not auth:
+    if not auth or auth.username is None or auth.password is None:
         return False
-    return auth.username == ADMIN_USER and auth.password == ADMIN_PASSWORD
+    # compare_digest : duree de comparaison independante du contenu,
+    # evite de deviner le mot de passe caractere par caractere (timing attack)
+    user_ok = secrets.compare_digest(auth.username, ADMIN_USER)
+    pass_ok = secrets.compare_digest(auth.password, ADMIN_PASSWORD)
+    return user_ok and pass_ok
 
 
 def require_auth(f):
     @wraps(f)
     def decorated(*args, **kwargs):
+        ip = _client_ip()
+        if _too_many_failures(ip):
+            return Response('Trop de tentatives. Reessaie dans 15 minutes.\n', 429)
         auth = request.authorization
         if not check_auth(auth):
+            # On ne compte que les vraies tentatives (identifiants fournis),
+            # pas le 1er passage du navigateur qui demande le formulaire.
+            if auth:
+                _record_failure(ip)
             return Response(
                 'Acces protege\n', 401,
                 {'WWW-Authenticate': 'Basic realm="Sargassum Admin"'},

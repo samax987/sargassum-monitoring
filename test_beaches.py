@@ -168,6 +168,8 @@ class TestComputeBeachScoresIntegration(unittest.TestCase):
         self.db_path = Path(self.db_file.name)
 
         conn = sqlite3.connect(self.db_path)
+        # Schema aligne sur la prod (resolution 3h de mai 2026) :
+        # hour_offset et positions_viz_json sont requis par beaches.py.
         conn.executescript("""
             CREATE TABLE drift_predictions (
                 id INTEGER PRIMARY KEY,
@@ -180,7 +182,9 @@ class TestComputeBeachScoresIntegration(unittest.TestCase):
                 lon_min REAL, lon_max REAL, lat_min REAL, lat_max REAL,
                 active_fraction REAL,
                 positions_json TEXT,
-                raw_metadata TEXT
+                raw_metadata TEXT,
+                hour_offset INTEGER,
+                positions_viz_json TEXT
             );
         """)
 
@@ -191,13 +195,15 @@ class TestComputeBeachScoresIntegration(unittest.TestCase):
         positions = [[-60.86 + i * 0.01, 14.39 + i * 0.01] for i in range(10)]
         positions_json = _json.dumps(positions)
 
+        # hour_offset = day*24 : snapshots de bord de journee, comme en prod
+        # (beaches.py filtre hour_offset % 24 = 0 pour le scoring journalier)
         for day in range(6):
             conn.execute("""
                 INSERT INTO drift_predictions
                 (simulated_at, n_particles, current_source, day_offset,
-                 active_fraction, positions_json)
-                VALUES (?, 100, 'test', ?, 1.0, ?)
-            """, (simulated_at, day, positions_json))
+                 active_fraction, positions_json, hour_offset)
+                VALUES (?, 100, 'test', ?, 1.0, ?, ?)
+            """, (simulated_at, day, positions_json, day * 24))
 
         conn.commit()
         conn.close()
@@ -320,9 +326,23 @@ class TestBeachesData(unittest.TestCase):
         self.assertEqual(duplicates, [], f"Doublons detectes: {duplicates}")
 
     def test_saint_barth_beach_count(self):
-        """Saint-Barth doit avoir exactement 10 plages."""
-        count = sum(1 for b in beaches.BEACHES if b["island"] == "Saint-Barth")
-        self.assertEqual(count, 10)
+        """Saint-Barth contient au moins les 10 plages historiques.
+
+        BEACHES est charge depuis la table beaches_config quand elle existe :
+        des plages peuvent etre AJOUTEES via l'admin (ex. Anse des Cayes).
+        On verifie qu'aucune plage historique n'a disparu, sans casser a
+        chaque ajout legitime.
+        """
+        sbh = {b["name"] for b in beaches.BEACHES if b["island"] == "Saint-Barth"}
+        historiques = {
+            "Flamands", "Colombier", "Saint-Jean", "Lorient",
+            "Grand_Cul-de-Sac", "Petit_Cul-de-Sac", "Toiny",
+            "Gouverneur", "Grande_Saline", "Marigot",
+        }
+        manquantes = historiques - sbh
+        self.assertEqual(manquantes, set(),
+                         f"Plages SBH historiques disparues : {manquantes}")
+        self.assertGreaterEqual(len(sbh), 10)
 
 
 class TestRegressionKnownScores(unittest.TestCase):

@@ -56,6 +56,7 @@ MAX_NOTES_LEN = 500
 PHOTOS_DIR = Path(__file__).parent / "contrib_photos"
 PHOTO_MAX_EDGE = 1600
 PHOTO_JPEG_QUALITY = 85
+MAX_PHOTOS = 3   # une plage ne tient pas dans un cadre + échouage localisé
 
 # Rate-limiting (en mémoire process ; suffisant pour ce volume)
 LOGIN_MAX, LOGIN_WINDOW_S = 5, 15 * 60          # 5 tentatives / 15 min / IP
@@ -394,11 +395,16 @@ def submit_observation():
     elif observed_at is None:
         error = t["err_date"]
 
-    # Photo optionnelle : validée/ré-encodée seulement si le reste est valide
-    photo_path = None
+    # Photos optionnelles (jusqu'à MAX_PHOTOS) : une plage ne tient pas dans un
+    # seul cadre, et l'échouage est souvent localisé (cf. retours bénévoles).
+    # Validées/ré-encodées seulement si le reste du formulaire est valide.
+    photos: list[str] = []
     if error is None:
         try:
-            photo_path = _process_photo(request.files.get("photo"))
+            for fs in request.files.getlist("photos")[:MAX_PHOTOS]:
+                p = _process_photo(fs)
+                if p:
+                    photos.append(p)
         except ValueError:
             error = t["err_photo"]
 
@@ -417,17 +423,16 @@ def submit_observation():
         coverage_pct=coverage,
         notes=notes,
         client_ip=_client_ip(),
-        photo_path=photo_path,
+        photos=photos,
     )
-    logger.info("Signalement contributeur #%s : %s / %s (risque %s%s)",
-                c["id"], ISLAND, beach_name, observed_risk,
-                ", photo" if photo_path else "")
+    logger.info("Signalement contributeur #%s : %s / %s (risque %s, %d photo(s))",
+                c["id"], ISLAND, beach_name, observed_risk, len(photos))
     return redirect(url_for("contrib.observer", ok=1))
 
 
-@contrib_bp.route("/photo/<int:obs_id>")
-def photo(obs_id: int):
-    """Sert la photo d'un signalement — uniquement à son auteur connecté.
+@contrib_bp.route("/photo/<int:obs_id>/<int:idx>")
+def photo(obs_id: int, idx: int):
+    """Sert une photo (par index) d'un signalement — à son auteur connecté.
 
     (Sam, lui, voit les photos directement dans le dashboard Streamlit qui lit
     les fichiers en local sur le serveur.)
@@ -435,12 +440,11 @@ def photo(obs_id: int):
     c = _current_contributor()
     if not c:
         abort(404)  # 404 plutôt que 403 : ne révèle pas l'existence de la photo
-    obs = contributors_db.get_observation(obs_id)
-    if not obs or obs["contributor_id"] != c["id"] or not obs.get("photo_path"):
+    photos = contributors_db.get_owner_photos(obs_id, c["id"])
+    if idx < 0 or idx >= len(photos):
         abort(404)
     # send_from_directory borne l'accès au dossier photos (anti-traversal)
-    return send_from_directory(PHOTOS_DIR, Path(obs["photo_path"]).name,
-                               max_age=3600)
+    return send_from_directory(PHOTOS_DIR, Path(photos[idx]).name, max_age=3600)
 
 
 @contrib_bp.app_errorhandler(RequestEntityTooLarge)

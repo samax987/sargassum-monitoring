@@ -86,10 +86,10 @@ app.config.update(
     SESSION_COOKIE_SAMESITE="Lax",
     SESSION_COOKIE_SECURE=True,
     PERMANENT_SESSION_LIFETIME=timedelta(days=30),
-    # Plafond des requêtes entrantes (photos des signalements). Au-delà,
+    # Plafond des requêtes entrantes (jusqu'à 3 photos de téléphone). Au-delà,
     # Werkzeug lève RequestEntityTooLarge → message propre côté portail.
     # Doit rester cohérent avec client_max_body_size côté nginx.
-    MAX_CONTENT_LENGTH=12 * 1024 * 1024,
+    MAX_CONTENT_LENGTH=30 * 1024 * 1024,
 )
 
 # Enregistre les routes admin et stats
@@ -459,20 +459,25 @@ def api_observations():
     « dernier kilomètre » : ce qu'un humain a vraiment vu sur place).
     """
     obs = contributors_db.latest_public_observations(ISLAND, within_hours=24)
+    # Construit les URLs de photos côté serveur (le front n'a pas à connaître
+    # le schéma d'URL ni le nombre de photos à l'avance).
+    for b in obs.values():
+        n = b.pop('n_photos', 0)
+        b['photos'] = [f"/api/observation-photo/{b['obs_id']}/{i}" for i in range(n)]
     return jsonify({'island': ISLAND, 'window_hours': 24, 'beaches': obs})
 
 
-@app.route('/api/observation-photo/<int:obs_id>')
-def api_observation_photo(obs_id):
-    """Sert la photo d'une observation APPROUVÉE (= validée par Sam pour le public).
+@app.route('/api/observation-photo/<int:obs_id>/<int:idx>')
+def api_observation_photo(obs_id, idx):
+    """Sert une photo (par index) d'une observation APPROUVÉE par Sam.
 
     Les photos en attente ou rejetées ne sont jamais servies (404).
     """
-    rel = contributors_db.get_approved_photo_path(obs_id)
-    if not rel:
+    photos = contributors_db.get_approved_photos(obs_id)
+    if idx < 0 or idx >= len(photos):
         abort(404)
     # send_from_directory borne l'accès au dossier photos (anti path-traversal)
-    return send_from_directory(PHOTOS_DIR, Path(rel).name, max_age=3600)
+    return send_from_directory(PHOTOS_DIR, Path(photos[idx]).name, max_age=3600)
 
 
 @app.route('/api/subscribe', methods=['POST'])

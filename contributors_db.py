@@ -21,6 +21,7 @@ Conventions du projet :
 
 from __future__ import annotations
 
+import json
 import logging
 import sqlite3
 from datetime import datetime, timedelta, timezone
@@ -115,6 +116,19 @@ def init_db(db_path: Path | str = DB_PATH) -> None:
             )
         except sqlite3.OperationalError:
             pass  # colonne déjà présente
+        # Multi-photos (juin 2026) : liste JSON de chemins. photo_path (single)
+        # reste pour rétro-compat ; photos_json est désormais la source.
+        try:
+            conn.execute(
+                "ALTER TABLE contributor_observations ADD COLUMN photos_json TEXT"
+            )
+        except sqlite3.OperationalError:
+            pass
+        # Backfill : les anciens signalements à photo unique → liste JSON.
+        conn.execute(
+            "UPDATE contributor_observations SET photos_json = '[\"' || photo_path || '\"]' "
+            "WHERE photos_json IS NULL AND photo_path IS NOT NULL"
+        )
         conn.commit()
         logger.info("contributors_db : tables prêtes")
     finally:
@@ -257,24 +271,45 @@ def add_observation(
     coverage_pct: int | None = None,
     notes: str | None = None,
     client_ip: str | None = None,
-    photo_path: str | None = None,
+    photos: list[str] | None = None,
     db_path: Path | str = DB_PATH,
 ) -> int:
-    """Enregistre un signalement en attente de modération. Retourne son id."""
+    """Enregistre un signalement en attente de modération. Retourne son id.
+
+    `photos` : liste de chemins relatifs (0 à 3). Stockée en JSON ; le premier
+    est aussi copié dans photo_path (rétro-compat avec l'ancien schéma).
+    """
+    photos = [p for p in (photos or []) if p]
     conn = get_connection(db_path)
     try:
         cur = conn.execute(
             """INSERT INTO contributor_observations
                (contributor_id, observed_at, island, beach_name, observed_risk,
-                coverage_pct, notes, submitted_at, client_ip, photo_path, status)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')""",
+                coverage_pct, notes, submitted_at, client_ip,
+                photo_path, photos_json, status)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')""",
             (contributor_id, observed_at, island, beach_name, observed_risk,
-             coverage_pct, notes, _utcnow(), client_ip, photo_path),
+             coverage_pct, notes, _utcnow(), client_ip,
+             photos[0] if photos else None, json.dumps(photos)),
         )
         conn.commit()
         return cur.lastrowid
     finally:
         conn.close()
+
+
+def photos_from_row(row: dict) -> list[str]:
+    """Chemins des photos d'un signalement (gère photos_json + legacy photo_path)."""
+    raw = row.get("photos_json")
+    if raw:
+        try:
+            v = json.loads(raw)
+            if isinstance(v, list):
+                return [p for p in v if p]
+        except (ValueError, TypeError):
+            pass
+    p = row.get("photo_path")
+    return [p] if p else []
 
 
 def get_observation(obs_id: int, db_path: Path | str = DB_PATH) -> dict | None:
@@ -302,7 +337,12 @@ def list_pending_observations(db_path: Path | str = DB_PATH) -> list[dict]:
             ORDER BY o.submitted_at ASC
             """
         ).fetchall()
-        return [dict(r) for r in rows]
+        out = []
+        for r in rows:
+            d = dict(r)
+            d["photos"] = photos_from_row(d)
+            out.append(d)
+        return out
     finally:
         conn.close()
 
@@ -318,7 +358,12 @@ def list_observations_for(
                ORDER BY submitted_at DESC LIMIT ?""",
             (contributor_id, limit),
         ).fetchall()
-        return [dict(r) for r in rows]
+        out = []
+        for r in rows:
+            d = dict(r)
+            d["photos"] = photos_from_row(d)
+            out.append(d)
+        return out
     finally:
         conn.close()
 
@@ -401,7 +446,7 @@ def latest_public_observations(
     try:
         rows = conn.execute(
             """SELECT beach_name, observed_risk, coverage_pct, observed_at,
-                      photo_path, id
+                      photo_path, photos_json, id
                FROM contributor_observations
                WHERE island = ? AND status = 'approved' AND observed_at >= ?
                ORDER BY observed_at DESC""",
@@ -415,7 +460,7 @@ def latest_public_observations(
                     "risk": r["observed_risk"],
                     "coverage": r["coverage_pct"],
                     "observed_at": r["observed_at"],
-                    "has_photo": bool(r["photo_path"]),
+                    "n_photos": len(photos_from_row(dict(r))),
                     "obs_id": r["id"],
                 }
         return latest
@@ -423,20 +468,36 @@ def latest_public_observations(
         conn.close()
 
 
-def get_approved_photo_path(obs_id: int, db_path: Path | str = DB_PATH) -> str | None:
-    """Chemin de la photo d'un signalement APPROUVÉ (pour la route photo publique).
+def get_approved_photos(obs_id: int, db_path: Path | str = DB_PATH) -> list[str]:
+    """Photos d'un signalement APPROUVÉ (pour la route photo publique).
 
-    Retourne None si le signalement n'est pas approuvé ou n'a pas de photo —
-    les photos en attente/rejetées ne sont jamais servies publiquement.
+    Liste vide si le signalement n'est pas approuvé — les photos en attente
+    ou rejetées ne sont jamais servies publiquement.
     """
     conn = get_connection(db_path)
     try:
         row = conn.execute(
-            "SELECT photo_path FROM contributor_observations "
+            "SELECT photo_path, photos_json FROM contributor_observations "
             "WHERE id = ? AND status = 'approved'",
             (obs_id,),
         ).fetchone()
-        return row["photo_path"] if row and row["photo_path"] else None
+        return photos_from_row(dict(row)) if row else []
+    finally:
+        conn.close()
+
+
+def get_owner_photos(
+    obs_id: int, contributor_id: int, db_path: Path | str = DB_PATH
+) -> list[str]:
+    """Photos d'un signalement appartenant à ce contributeur (route photo privée)."""
+    conn = get_connection(db_path)
+    try:
+        row = conn.execute(
+            "SELECT photo_path, photos_json FROM contributor_observations "
+            "WHERE id = ? AND contributor_id = ?",
+            (obs_id, contributor_id),
+        ).fetchone()
+        return photos_from_row(dict(row)) if row else []
     finally:
         conn.close()
 

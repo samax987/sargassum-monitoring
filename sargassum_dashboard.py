@@ -1226,11 +1226,11 @@ elif page == "Contributeurs":
                     f"par {o['display_name']} · observé "
                     f"{o['observed_at'][:16].replace('T', ' ')}{note_txt}"
                 )
-                # Photo jointe : affichée en local (le dashboard tourne sur le
-                # serveur, cwd = /opt/sargassum, photo_path est relatif).
-                photo = o.get("photo_path")
-                if photo and Path(photo).exists():
-                    c1.image(photo, width=320)
+                # Photos jointes (jusqu'à 3) : affichées en local (le dashboard
+                # tourne sur le serveur, cwd = /opt/sargassum, chemins relatifs).
+                photos_ok = [p for p in o.get("photos", []) if p and Path(p).exists()]
+                for ph in photos_ok:
+                    c1.image(ph, width=320)
                 if c2.button("✅ Valider", key=f"obs_ok_{o['id']}", width="stretch"):
                     contributors_db.approve_observation(o["id"], db_path)
                     st.rerun()

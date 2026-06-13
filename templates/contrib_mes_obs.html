@@ -29,8 +29,8 @@
               <td>{{ t.risk_map.get(o.observed_risk, o.observed_risk) }}</td>
               <td>{{ o.coverage_pct if o.coverage_pct is not none else '—' }}{% if o.coverage_pct is not none %}&nbsp;%{% endif %}</td>
               <td>
-                {% if o.photo_path %}
-                  <a href="{{ url_for('contrib.photo', obs_id=o.id) }}" target="_blank">{{ t.photo_view }}</a>
+                {% if o.photos %}
+                  <a href="{{ url_for('contrib.photo', obs_id=o.id, idx=0) }}" target="_blank">{{ t.photo_view }}{% if o.photos|length > 1 %} ×{{ o.photos|length }}{% endif %}</a>
                 {% else %}—{% endif %}
               </td>
               <td>

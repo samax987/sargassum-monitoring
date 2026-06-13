@@ -578,8 +578,9 @@
             if (!o) return '';
             const color = RISK_COLORS[o.risk] || '#888';
             const state = (I18N.obs_state && I18N.obs_state[o.risk]) || '';
-            const photo = o.has_photo
-                ? ` · <a href="/api/observation-photo/${o.obs_id}" target="_blank" rel="noopener">📷 ${I18N.obs_photo}</a>`
+            const photos = o.photos || [];
+            const photo = photos.length
+                ? ` · <a href="${photos[0]}" target="_blank" rel="noopener">📷 ${I18N.obs_photo}${photos.length > 1 ? ' ×' + photos.length : ''}</a>`
                 : '';
             return `<div class="obs-line">📍 ${I18N.obs_seen} <strong style="color:${color}">${state}</strong>`
                  + ` <span class="obs-meta">${agoText(o.observed_at)} ${I18N.obs_by}${photo}</span></div>`;
@@ -683,11 +684,11 @@
                 const state = (I18N.obs_state && I18N.obs_state[o.risk]) || '';
                 obsBlock = `<br><span style="color:${oc};font-weight:600">📍 ${I18N.obs_seen} : ${state}</span>`
                          + ` <span style="opacity:.7">(${agoText(o.observed_at)})</span>`;
-                if (o.has_photo) {
-                    obsBlock += `<br><a href="/api/observation-photo/${o.obs_id}" target="_blank" rel="noopener">`
-                              + `<img src="/api/observation-photo/${o.obs_id}" alt="photo" `
+                (o.photos || []).forEach(u => {
+                    obsBlock += `<br><a href="${u}" target="_blank" rel="noopener">`
+                              + `<img src="${u}" alt="photo" `
                               + `style="width:100%;max-width:220px;border-radius:6px;margin-top:6px;display:block"></a>`;
-                }
+                });
             }
             const marker = L.marker([beach.lat, beach.lon], { icon });
             marker.bindPopup(`

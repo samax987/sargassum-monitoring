@@ -47,6 +47,7 @@
         <span class="opt">{{ t.obs_photo_hint }}</span></label>
       <!-- capture="environment" : sur mobile, propose directement l'appareil photo -->
       <input type="file" id="photo" name="photo" accept="image/*" capture="environment">
+      <p class="lead" style="font-size:.82rem;margin-top:6px">{{ t.obs_photo_consent }}</p>
 
       <label for="notes">{{ t.obs_notes_label }} <span class="opt">{{ t.obs_notes_hint }}</span></label>
       <textarea id="notes" name="notes" maxlength="500"

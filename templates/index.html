@@ -107,6 +107,10 @@
             border-radius: 3px;
         }
         .day-labels { display: flex; gap: 3px; margin-top: 4px; font-size: 0.65em; color: #6c7a99; font-weight: 500; }
+        /* Ligne "constaté" (observation bénévole) sous la prévision */
+        .obs-line { margin-top: 8px; padding-top: 8px; border-top: 1px dashed #1a2744; font-size: 0.78em; color: #cbd5e1; }
+        .obs-line .obs-meta { color: #6c7a99; }
+        .obs-line a { color: #2dd4bf; text-decoration: none; }
         .day-labels span { flex: 1; text-align: center; }
 
         /* ─── Time controls ──────────────────────────────────────────────── */
@@ -555,6 +559,41 @@
         let beachData = {};
         let driftLayer = null;
         let beachLayer = null;
+        // Observations terrain (bénévoles), par nom de plage — alimente le "constaté"
+        let OBS = {};
+        const RISK_COLORS = { none: '#22c55e', low: '#eab308', medium: '#f97316', high: '#ef4444' };
+
+        // "il y a X" à partir d'un horodatage UTC (traité en instant UTC, comme la dérive)
+        function agoText(iso) {
+            const t = new Date(iso.endsWith('Z') ? iso : iso + 'Z').getTime();
+            let mins = Math.round((Date.now() - t) / 60000);
+            if (mins < 1) return I18N.obs_ago_now;
+            if (mins < 60) return I18N.obs_ago_min.replace('{n}', mins);
+            return I18N.obs_ago_h.replace('{n}', Math.round(mins / 60));
+        }
+
+        // Annotation "constaté" pour une plage (vide si pas d'observation fraîche)
+        function observedHtml(name) {
+            const o = OBS[name];
+            if (!o) return '';
+            const color = RISK_COLORS[o.risk] || '#888';
+            const state = (I18N.obs_state && I18N.obs_state[o.risk]) || '';
+            const photo = o.has_photo
+                ? ` · <a href="/api/observation-photo/${o.obs_id}" target="_blank" rel="noopener">📷 ${I18N.obs_photo}</a>`
+                : '';
+            return `<div class="obs-line">📍 ${I18N.obs_seen} <strong style="color:${color}">${state}</strong>`
+                 + ` <span class="obs-meta">${agoText(o.observed_at)} ${I18N.obs_by}${photo}</span></div>`;
+        }
+
+        async function loadObservations() {
+            try {
+                const res = await fetch('/api/observations');
+                const data = await res.json();
+                OBS = data.beaches || {};
+            } catch (e) { OBS = {}; }
+            // Re-rendu si les plages sont déjà affichées (l'obs peut arriver après le status)
+            if (beachData.beaches) { renderBeaches(beachData.beaches); updateMap(); }
+        }
 
         // === Init carte ===
         const map = L.map('map', {
@@ -636,12 +675,26 @@
                 popupAnchor: [0, -28],
             });
 
+            // Observation terrain éventuelle (bénévole) : photo + état constaté
+            const o = OBS[beach.name];
+            let obsBlock = '';
+            if (o) {
+                const oc = RISK_COLORS[o.risk] || '#888';
+                const state = (I18N.obs_state && I18N.obs_state[o.risk]) || '';
+                obsBlock = `<br><span style="color:${oc};font-weight:600">📍 ${I18N.obs_seen} : ${state}</span>`
+                         + ` <span style="opacity:.7">(${agoText(o.observed_at)})</span>`;
+                if (o.has_photo) {
+                    obsBlock += `<br><a href="/api/observation-photo/${o.obs_id}" target="_blank" rel="noopener">`
+                              + `<img src="/api/observation-photo/${o.obs_id}" alt="photo" `
+                              + `style="width:100%;max-width:220px;border-radius:6px;margin-top:6px;display:block"></a>`;
+                }
+            }
             const marker = L.marker([beach.lat, beach.lon], { icon });
             marker.bindPopup(`
                 <strong>${beach.name.replace(/_/g, ' ')}</strong><br>
                 ${I18N.popup_risk} J+${day} : <span style="color:${color};font-weight:600">${I18N.risk[level]}</span><br>
                 ${I18N.popup_score} : ${dayData.regional_score}<br>
-                ${I18N.popup_closest} : <strong>${dayData.closest_km} km</strong>
+                ${I18N.popup_closest} : <strong>${dayData.closest_km} km</strong>${obsBlock}
             `);
             return marker;
         }
@@ -818,6 +871,7 @@
                     <div class="day-labels">
                         <span>J+0</span><span>J+1</span><span>J+2</span><span>J+3</span><span>J+4</span>
                     </div>
+                    ${observedHtml(beach.name)}
                 `;
                 container.appendChild(card);
             });
@@ -1052,7 +1106,8 @@
         loadHealth();
         loadWeather();
         loadTimeline();
-        setInterval(() => { loadStatus(); loadHealth(); loadTimeline(); }, 5 * 60 * 1000);
+        loadObservations();
+        setInterval(() => { loadStatus(); loadHealth(); loadTimeline(); loadObservations(); }, 5 * 60 * 1000);
         setInterval(loadWeather, 15 * 60 * 1000);
     </script>
 </body>

@@ -28,7 +28,10 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from flask import Flask, g, jsonify, render_template, request, redirect, session
+from flask import (
+    Flask, abort, g, jsonify, render_template, request, redirect,
+    send_from_directory, session,
+)
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 # Permet d'importer beaches_db, contributors_db et les modules de routes
@@ -38,7 +41,7 @@ import beaches_db
 import contributors_db
 import contrib_i18n
 from sargassum_admin_routes import register_admin_routes
-from sargassum_contributor_routes import register_contributor_routes
+from sargassum_contributor_routes import register_contributor_routes, PHOTOS_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -446,6 +449,30 @@ def api_health():
         'checked_at': row['checked_at'],
         'failures': row['failures'] or '',
     })
+
+
+@app.route('/api/observations')
+def api_observations():
+    """Dernières observations terrain (bénévoles) APPROUVÉES, < 24 h, par plage SBH.
+
+    Anonyme — complète la prévision du modèle sur la carte publique (le
+    « dernier kilomètre » : ce qu'un humain a vraiment vu sur place).
+    """
+    obs = contributors_db.latest_public_observations(ISLAND, within_hours=24)
+    return jsonify({'island': ISLAND, 'window_hours': 24, 'beaches': obs})
+
+
+@app.route('/api/observation-photo/<int:obs_id>')
+def api_observation_photo(obs_id):
+    """Sert la photo d'une observation APPROUVÉE (= validée par Sam pour le public).
+
+    Les photos en attente ou rejetées ne sont jamais servies (404).
+    """
+    rel = contributors_db.get_approved_photo_path(obs_id)
+    if not rel:
+        abort(404)
+    # send_from_directory borne l'accès au dossier photos (anti path-traversal)
+    return send_from_directory(PHOTOS_DIR, Path(rel).name, max_age=3600)
 
 
 @app.route('/api/subscribe', methods=['POST'])

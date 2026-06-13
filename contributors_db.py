@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -381,6 +381,62 @@ def reject_observation(obs_id: int, db_path: Path | str = DB_PATH) -> bool:
         )
         conn.commit()
         return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
+def latest_public_observations(
+    island: str, within_hours: int = 24, db_path: Path | str = DB_PATH
+) -> dict[str, dict]:
+    """Dernière observation APPROUVÉE par plage, dans la fenêtre de fraîcheur.
+
+    Pour l'affichage public sur la carte (à côté de la prévision). ANONYME :
+    aucun nom de contributeur n'est exposé. On ne prend que les signalements
+    `approved` (donc validés par Sam pour un usage public) et récents — au-delà
+    de `within_hours`, une observation devient trompeuse pendant un épisode.
+    """
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=within_hours)
+              ).strftime("%Y-%m-%dT%H:%M:%S")
+    conn = get_connection(db_path)
+    try:
+        rows = conn.execute(
+            """SELECT beach_name, observed_risk, coverage_pct, observed_at,
+                      photo_path, id
+               FROM contributor_observations
+               WHERE island = ? AND status = 'approved' AND observed_at >= ?
+               ORDER BY observed_at DESC""",
+            (island, cutoff),
+        ).fetchall()
+        latest: dict[str, dict] = {}
+        for r in rows:
+            # Première occurrence = la plus récente (tri DESC) → on la garde
+            if r["beach_name"] not in latest:
+                latest[r["beach_name"]] = {
+                    "risk": r["observed_risk"],
+                    "coverage": r["coverage_pct"],
+                    "observed_at": r["observed_at"],
+                    "has_photo": bool(r["photo_path"]),
+                    "obs_id": r["id"],
+                }
+        return latest
+    finally:
+        conn.close()
+
+
+def get_approved_photo_path(obs_id: int, db_path: Path | str = DB_PATH) -> str | None:
+    """Chemin de la photo d'un signalement APPROUVÉ (pour la route photo publique).
+
+    Retourne None si le signalement n'est pas approuvé ou n'a pas de photo —
+    les photos en attente/rejetées ne sont jamais servies publiquement.
+    """
+    conn = get_connection(db_path)
+    try:
+        row = conn.execute(
+            "SELECT photo_path FROM contributor_observations "
+            "WHERE id = ? AND status = 'approved'",
+            (obs_id,),
+        ).fetchone()
+        return row["photo_path"] if row and row["photo_path"] else None
     finally:
         conn.close()
 

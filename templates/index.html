@@ -393,6 +393,17 @@
             border-left: 2px solid #2dd4bf;
             border-radius: 8px;
         }
+        /* Tag « masse au large » : sargasses qui approchent mais pas encore sur la plage */
+        .offshore-tag {
+            display: inline-block;
+            margin: 2px 0 2px;
+            font-size: 0.72em;
+            color: #fbbf24;
+            background: rgba(245, 158, 11, 0.12);
+            border: 1px solid rgba(245, 158, 11, 0.35);
+            border-radius: 6px;
+            padding: 2px 7px;
+        }
 
         /* ─── Loading ────────────────────────────────────────────────────── */
         .loading { text-align: center; padding: 30px 20px; color: #6c7a99; font-size: 0.85em; }
@@ -677,10 +688,13 @@
             const dayData = beach.forecast.find(f => f.day_offset === day);
             if (!dayData) return null;
 
-            const color = dayData.color;
-            const level = dayData.risk_level;
+            const color = dayData.presence_color;     // badge = présence SUR la plage
+            const level = dayData.presence;
             const isHigh = level === 'high' || level === 'medium';
             const pulseClass = isHigh ? 'pulse' : '';
+            // Masse encore au large : régional élevé mais plage pas (encore) touchée
+            const offshore = (dayData.risk_level === 'high' || dayData.risk_level === 'medium')
+                          && (level === 'none' || level === 'low');
 
             // Premières lettres pour les markers
             const initials = beach.name.replace(/_/g, ' ').split(/[ -]/)
@@ -727,13 +741,16 @@
             if (tr && tr.state === 'recede') trendTxt = ` · ${I18N.trend_recede} ↘`;
             else if (tr && tr.state === 'approach') trendTxt = ` · ${I18N.trend_approach} ↗`;
 
+            const offshoreHtml = offshore
+                ? `<span style="color:#fbbf24">⚠️ ${I18N.offshore_note}</span><br>`
+                : '';
             const marker = L.marker([beach.lat, beach.lon], { icon });
             // Largeur de popup bornée à l'écran (sinon débordement sur mobile)
             const popupMaxW = Math.min(280, (window.innerWidth || 360) - 40);
             marker.bindPopup(`
                 <strong>${beach.name.replace(/_/g, ' ')}</strong><br>
                 ${I18N.popup_risk} J+${day} : <span style="color:${color};font-weight:600">${I18N.risk[level]}</span><br>
-                ${I18N.popup_closest} : <strong>~${Math.round(dayData.closest_km)} km</strong>${trendTxt}${obsBlock}
+                ${offshoreHtml}${I18N.popup_closest} : <strong>~${Math.round(dayData.closest_km)} km</strong>${trendTxt}${obsBlock}
             `, { maxWidth: popupMaxW });
             return marker;
         }
@@ -888,24 +905,33 @@
             container.innerHTML = '';
 
             const rank = { high: 3, medium: 2, low: 1, none: 0 };
-            beaches.sort((a, b) => rank[b.worst_3d] - rank[a.worst_3d]);
+            // Plages réellement touchées (présence) en haut, puis approche régionale
+            beaches.sort((a, b) =>
+                (rank[b.worst_3d_presence] - rank[a.worst_3d_presence])
+                || (rank[b.worst_3d] - rank[a.worst_3d]));
 
             beaches.forEach(beach => {
                 const card = document.createElement('div');
                 card.className = 'beach';
-                card.style.setProperty('--risk-color', beach.worst_3d_color);
+                card.style.setProperty('--risk-color', beach.worst_3d_presence_color);
                 card.onclick = () => map.flyTo([beach.lat, beach.lon], 16, { duration: 0.8 });
 
                 const days = beach.forecast.slice(0, 5);
                 const dots = days.map(d =>
-                    `<div class="day-dot" style="background:${d.color}" title="J+${d.day_offset}: ${I18N.risk[d.risk_level]}"></div>`
+                    `<div class="day-dot" style="background:${d.presence_color}" title="J+${d.day_offset}: ${I18N.risk[d.presence]}"></div>`
                 ).join('');
+
+                // Tag « masse au large » : régional ≥ moyen mais plage pas (encore) touchée
+                const offshore = rank[beach.worst_3d] >= 2 && rank[beach.worst_3d_presence] <= 1;
+                const offshoreTag = offshore
+                    ? `<span class="offshore-tag">⚠️ ${I18N.offshore_short}</span>` : '';
 
                 card.innerHTML = `
                     <div class="beach-header">
                         <div class="beach-name">${beach.name.replace(/_/g, ' ')}</div>
-                        <span class="beach-pill" style="background:${beach.worst_3d_color}">${I18N.risk[beach.worst_3d]}</span>
+                        <span class="beach-pill" style="background:${beach.worst_3d_presence_color}">${I18N.risk[beach.worst_3d_presence]}</span>
                     </div>
+                    ${offshoreTag}
                     <div class="forecast-strip">${dots}</div>
                     <div class="day-labels">
                         <span>J+0</span><span>J+1</span><span>J+2</span><span>J+3</span><span>J+4</span>

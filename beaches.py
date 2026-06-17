@@ -42,6 +42,10 @@ REGIONAL_SIGMA   = 50.0   # km — bandwidth pour le score d'approche
 # Seuils sur regional_score (population extrapolée, σ = 50 km)
 RISK_THRESHOLDS = {"low": 5.0, "medium": 25.0, "high": 75.0}
 
+# Seuils sur local_score (présence réelle/imminente SUR la plage, σ = radius_km).
+# Sert au badge public (« sur la plage »). Provisoires — à affiner avec le terrain.
+LOCAL_THRESHOLDS = {"low": 0.5, "medium": 3.0, "high": 10.0}
+
 # Correction des biais issus de calibration_spatial_bias
 # Appliquée seulement si n_obs >= MIN_BIAS_NOBS (sinon biais trop bruité)
 APPLY_BIAS_CORRECTION = True
@@ -268,6 +272,23 @@ def risk_label(regional_score: float) -> str:
     if regional_score >= RISK_THRESHOLDS["medium"]:
         return "medium"
     if regional_score >= RISK_THRESHOLDS["low"]:
+        return "low"
+    return "none"
+
+
+def presence_label(local_score: float) -> str:
+    """Badge « sur la plage » dérivé du local_score (présence réelle/imminente).
+
+    Distinct de risk_label (régional, σ=50 km) qui reste le signal d'approche
+    utilisé par les alertes Telegram, la timeline et la calibration.
+    """
+    if local_score is None:
+        return "none"
+    if local_score >= LOCAL_THRESHOLDS["high"]:
+        return "high"
+    if local_score >= LOCAL_THRESHOLDS["medium"]:
+        return "medium"
+    if local_score >= LOCAL_THRESHOLDS["low"]:
         return "low"
     return "none"
 

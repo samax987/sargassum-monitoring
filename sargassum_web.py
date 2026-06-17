@@ -214,7 +214,13 @@ def api_status():
 
     Joint avec beaches_config pour utiliser les coords ACTUELLES (admin)
     et non celles figees au moment du scoring (qui peuvent etre obsoletes).
+
+    Le payload expose DEUX lectures :
+      - risk_level (regional, sigma=50km) : signal d'APPROCHE -> tag "masse au large",
+        et c'est ce que consomment alertes Telegram / timeline / calibration.
+      - presence (local, sigma=radius) : badge PUBLIC "sur la plage".
     """
+    from beaches import presence_label
     conn = get_db()
     cur = conn.execute("""
         SELECT s.beach_name,
@@ -222,6 +228,7 @@ def api_status():
                COALESCE(bc.lon, s.beach_lon) AS beach_lon,
                s.day_offset, s.risk_level,
                ROUND(s.regional_score, 1) AS regional_score,
+               ROUND(s.local_score, 2) AS local_score,
                ROUND(s.closest_km, 1) AS closest_km,
                s.computed_at
         FROM beach_risk_scores s
@@ -246,16 +253,24 @@ def api_status():
                 'computed_at': row['computed_at'],
                 'forecast': [],
             }
+        presence = presence_label(row['local_score'])
         beaches[name]['forecast'].append({
             'day_offset': row['day_offset'],
+            # Régional (approche) — conservé pour le tag "masse au large" + alertes/timeline
             'risk_level': row['risk_level'],
             'color': risk_to_color(row['risk_level']),
             'label': risk_to_fr(row['risk_level']),
             'regional_score': row['regional_score'],
             'closest_km': row['closest_km'],
+            'local_score': row['local_score'],
+            # Présence (sur la plage) — pilote le badge public
+            'presence': presence,
+            'presence_color': risk_to_color(presence),
+            'presence_label': risk_to_fr(presence),
         })
 
-    # Ajoute le pire risque sur 3 jours
+    # Pire sur 3 jours : régional (approche -> tag "masse au large")
+    # ET présence (badge public "sur la plage").
     for beach in beaches.values():
         rank = {'none': 0, 'low': 1, 'medium': 2, 'high': 3}
         worst = max(
@@ -265,6 +280,13 @@ def api_status():
         beach['worst_3d'] = worst
         beach['worst_3d_color'] = risk_to_color(worst)
         beach['worst_3d_label'] = risk_to_fr(worst)
+        worst_pres = max(
+            (f['presence'] for f in beach['forecast'][:3]),
+            key=lambda l: rank.get(l, 0),
+        )
+        beach['worst_3d_presence'] = worst_pres
+        beach['worst_3d_presence_color'] = risk_to_color(worst_pres)
+        beach['worst_3d_presence_label'] = risk_to_fr(worst_pres)
 
     conn.close()
     return jsonify({

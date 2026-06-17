@@ -381,6 +381,19 @@
             border-radius: 0 3px 0 0;
         }
 
+        /* Note pédagogique grand public : ce que « Fort » signifie vs le constaté terrain.
+           Répond à « rouge partout alors que la plage est propre » sans toucher au calcul du risque. */
+        .section-note {
+            font-size: 0.74em;
+            color: #9aa6c2;
+            line-height: 1.5;
+            margin: 2px 0 14px;
+            padding: 9px 11px;
+            background: rgba(22, 33, 62, 0.55);
+            border-left: 2px solid #2dd4bf;
+            border-radius: 8px;
+        }
+
         /* ─── Loading ────────────────────────────────────────────────────── */
         .loading { text-align: center; padding: 30px 20px; color: #6c7a99; font-size: 0.85em; }
         .skeleton {
@@ -405,7 +418,7 @@
             #app { flex-direction: column-reverse; height: auto; min-height: calc(100vh - 56px); }
             #sidebar { width: 100%; height: auto; border-right: none; border-top: 1px solid #1a2744; }
             #map { height: 58vh; min-height: 320px; }
-            .marker-label { font-size: 9.5px; padding: 2px 6px; }
+            .marker-label { display: none; }   /* mobile : noms masqués (ils se chevauchaient) → pastille seule, nom complet au tap */
 
             /* Légende compacte : ne doit plus manger la carte sur petit écran */
             .legend { font-size: 10px; padding: 7px 9px; line-height: 1.45; max-width: 44vw; }
@@ -523,6 +536,7 @@
 
             <div class="section">
                 <h2>{{ t.h_beaches }}</h2>
+                <p class="section-note">{{ t.risk_note }}</p>
                 <div id="beaches-list" class="loading">
                     <div class="skeleton" style="height:80px;margin-bottom:8px;"></div>
                     <div class="skeleton" style="height:80px;margin-bottom:8px;"></div>
@@ -719,8 +733,7 @@
             marker.bindPopup(`
                 <strong>${beach.name.replace(/_/g, ' ')}</strong><br>
                 ${I18N.popup_risk} J+${day} : <span style="color:${color};font-weight:600">${I18N.risk[level]}</span><br>
-                ${I18N.popup_score} : ${dayData.regional_score}<br>
-                ${I18N.popup_closest} : <strong>${dayData.closest_km} km</strong>${trendTxt}${obsBlock}
+                ${I18N.popup_closest} : <strong>~${Math.round(dayData.closest_km)} km</strong>${trendTxt}${obsBlock}
             `, { maxWidth: popupMaxW });
             return marker;
         }

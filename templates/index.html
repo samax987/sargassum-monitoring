@@ -107,6 +107,11 @@
             border-radius: 3px;
         }
         .day-labels { display: flex; gap: 3px; margin-top: 4px; font-size: 0.65em; color: #6c7a99; font-weight: 500; }
+        /* Bannière de tendance de la dérive (île) : arrive / repart */
+        .trend-banner { margin: 12px 20px 0; padding: 10px 12px; border-radius: 10px; font-size: 0.84em; font-weight: 600; line-height: 1.35; }
+        .trend-banner.recede { background: rgba(34,197,94,0.15); color:#22c55e; border:1px solid rgba(34,197,94,0.3); }
+        .trend-banner.approach { background: rgba(239,68,68,0.15); color:#f87171; border:1px solid rgba(239,68,68,0.35); }
+        .trend-banner.stable { background: rgba(148,163,184,0.12); color:#cbd5e1; border:1px solid #1a2744; }
         /* Ligne "constaté" (observation bénévole) sous la prévision */
         .obs-line { margin-top: 8px; padding-top: 8px; border-top: 1px dashed #1a2744; font-size: 0.78em; color: #cbd5e1; }
         .obs-line .obs-meta { color: #6c7a99; }
@@ -436,6 +441,7 @@
 
     <div id="app">
         <aside id="sidebar">
+            <div id="trend-banner" class="trend-banner" style="display:none"></div>
             <div class="section">
                 <h2>{{ t.h_horizon }}</h2>
                 <div class="time-control">
@@ -692,12 +698,18 @@
                               + `style="width:100%;max-width:220px;border-radius:6px;margin-top:6px;display:block"></a>`;
                 });
             }
+            // Tendance île (la masse arrive ↗ / repart ↘) accolée à la distance
+            let trendTxt = '';
+            const tr = window.TREND;
+            if (tr && tr.state === 'recede') trendTxt = ` · ${I18N.trend_recede} ↘`;
+            else if (tr && tr.state === 'approach') trendTxt = ` · ${I18N.trend_approach} ↗`;
+
             const marker = L.marker([beach.lat, beach.lon], { icon });
             marker.bindPopup(`
                 <strong>${beach.name.replace(/_/g, ' ')}</strong><br>
                 ${I18N.popup_risk} J+${day} : <span style="color:${color};font-weight:600">${I18N.risk[level]}</span><br>
                 ${I18N.popup_score} : ${dayData.regional_score}<br>
-                ${I18N.popup_closest} : <strong>${dayData.closest_km} km</strong>${obsBlock}
+                ${I18N.popup_closest} : <strong>${dayData.closest_km} km</strong>${trendTxt}${obsBlock}
             `);
             return marker;
         }
@@ -1104,13 +1116,35 @@
             });
         }
 
+        // Tendance île : la masse de sargasses arrive-t-elle (↗) ou repart-elle (↘) ?
+        async function loadTrend() {
+            const el = document.getElementById('trend-banner');
+            try {
+                window.TREND = await (await fetch('/api/trend')).json();
+            } catch (e) { window.TREND = null; }
+            const tr = window.TREND;
+            if (!el || !tr) return;
+            const dir = (I18N.compass_full && tr.compass_idx != null) ? I18N.compass_full[tr.compass_idx] : '';
+            let msg = '', cls = '';
+            if (tr.state === 'recede') { msg = I18N.trend_banner_recede.replace('{dir}', dir); cls = 'recede'; }
+            else if (tr.state === 'approach') { msg = I18N.trend_banner_approach.replace('{dir}', dir); cls = 'approach'; }
+            else if (tr.state === 'stable') { msg = I18N.trend_banner_stable; cls = 'stable'; }
+            else { el.style.display = 'none'; return; }   // calme / inconnu → pas de bannière
+            if (tr.closest_km != null) msg += ' · ' + I18N.trend_closest.replace('{km}', tr.closest_km);
+            el.textContent = msg;
+            el.className = 'trend-banner ' + cls;
+            el.style.display = 'block';
+            if (beachData.beaches) updateMap();   // rafraîchit les flèches des bulles
+        }
+
         // === Init ===
         loadStatus();
         loadHealth();
         loadWeather();
         loadTimeline();
         loadObservations();
-        setInterval(() => { loadStatus(); loadHealth(); loadTimeline(); loadObservations(); }, 5 * 60 * 1000);
+        loadTrend();
+        setInterval(() => { loadStatus(); loadHealth(); loadTimeline(); loadObservations(); loadTrend(); }, 5 * 60 * 1000);
         setInterval(loadWeather, 15 * 60 * 1000);
     </script>
 </body>

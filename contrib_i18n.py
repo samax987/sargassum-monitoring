@@ -311,6 +311,13 @@ MAP_TRANSLATIONS: dict[str, dict] = {
                       "medium": "présence moyenne", "high": "plage envahie"},
         "risk": {"none": "Aucun", "low": "Faible", "medium": "Moyen", "high": "Fort"},
         "compass": ["N", "NE", "E", "SE", "S", "SO", "O", "NO"],
+        "compass_full": ["nord", "nord-est", "est", "sud-est", "sud", "sud-ouest", "ouest", "nord-ouest"],
+        "trend_recede": "s'éloigne",
+        "trend_approach": "se rapproche",
+        "trend_banner_recede": "🌊 La masse de sargasses s'éloigne (côté {dir}) ↘",
+        "trend_banner_approach": "🌊 Une masse de sargasses se rapproche (côté {dir}) ↗",
+        "trend_banner_stable": "🌊 Sargasses stables autour de l'île →",
+        "trend_closest": "la plus proche à {km} km",
     },
     "en": {
         "html_lang": "en",
@@ -370,6 +377,13 @@ MAP_TRANSLATIONS: dict[str, dict] = {
                       "medium": "moderate presence", "high": "beach covered"},
         "risk": {"none": "None", "low": "Low", "medium": "Moderate", "high": "High"},
         "compass": ["N", "NE", "E", "SE", "S", "SW", "W", "NW"],
+        "compass_full": ["north", "north-east", "east", "south-east", "south", "south-west", "west", "north-west"],
+        "trend_recede": "moving away",
+        "trend_approach": "approaching",
+        "trend_banner_recede": "🌊 The sargassum mass is moving away ({dir} side) ↘",
+        "trend_banner_approach": "🌊 A sargassum mass is approaching ({dir} side) ↗",
+        "trend_banner_stable": "🌊 Sargassum stable around the island →",
+        "trend_closest": "nearest at {km} km",
     },
 }
 

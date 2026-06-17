@@ -21,6 +21,7 @@ Endpoints
 
 import json
 import logging
+import math
 import os
 import secrets
 import sqlite3
@@ -478,6 +479,86 @@ def api_observation_photo(obs_id, idx):
         abort(404)
     # send_from_directory borne l'accès au dossier photos (anti path-traversal)
     return send_from_directory(PHOTOS_DIR, Path(photos[idx]).name, max_age=3600)
+
+
+# ── Tendance de la dérive (la masse arrive-t-elle ou repart-elle ?) ─────────────
+# Signal NIVEAU ÎLE : Saint-Barth (~10 km) est petit devant le rayon de 70 km, donc
+# toutes les plages "voient" le même nuage. On regarde la fenêtre fiable 0→24 h.
+ISLAND_CENTER = (17.9, -62.83)
+TREND_RADIUS_KM = 70.0
+
+
+def _hav(lat1, lon1, lat2, lon2):
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dphi = math.radians(lat2 - lat1); dl = math.radians(lon2 - lon1)
+    a = math.sin(dphi/2)**2 + math.cos(p1)*math.cos(p2)*math.sin(dl/2)**2
+    return 2 * 6371.0 * math.asin(math.sqrt(a))
+
+
+def _bearing_idx(lat1, lon1, lat2, lon2):
+    """Index 0-7 (N,NE,E,SE,S,SO,O,NO) de la direction île → centre de masse."""
+    dlon = math.radians(lon2 - lon1)
+    y = math.sin(dlon) * math.cos(math.radians(lat2))
+    x = (math.cos(math.radians(lat1)) * math.sin(math.radians(lat2))
+         - math.sin(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.cos(dlon))
+    brng = (math.degrees(math.atan2(y, x)) + 360) % 360
+    return int((brng + 22.5) // 45) % 8
+
+
+def compute_drift_trend(conn) -> dict:
+    """La masse proche se rapproche-t-elle (↗) ou s'éloigne-t-elle (↘) ?
+
+    state : 'approach' | 'recede' | 'stable' | 'calm' | 'unknown'
+    compass_idx : où se trouve la masse (0-7), closest_km : distance actuelle.
+    """
+    row = conn.execute("SELECT MAX(simulated_at) m FROM drift_predictions").fetchone()
+    if not row or not row["m"]:
+        return {"state": "unknown"}
+    sim = row["m"]
+    samples = []
+    for h in (0, 12, 24):
+        r = conn.execute(
+            "SELECT positions_json, positions_viz_json FROM drift_predictions "
+            "WHERE simulated_at=? AND hour_offset=? ORDER BY id DESC LIMIT 1", (sim, h)
+        ).fetchone()
+        if not r:
+            continue
+        raw = r["positions_viz_json"] or r["positions_json"]
+        try:
+            pts = json.loads(raw) if raw else []
+        except (TypeError, json.JSONDecodeError):
+            pts = []
+        near = [(_hav(ISLAND_CENTER[0], ISLAND_CENTER[1], lat, lon), lon, lat)
+                for lon, lat in pts]
+        near = [x for x in near if x[0] <= TREND_RADIUS_KM]
+        if near:
+            samples.append({
+                "n": len(near),
+                "nearest": min(x[0] for x in near),
+                "clat": sum(x[2] for x in near) / len(near),
+                "clon": sum(x[1] for x in near) / len(near),
+            })
+    if not samples or samples[0]["n"] < 3:
+        return {"state": "calm"}
+    first, last = samples[0], samples[-1]
+    delta = last["nearest"] - first["nearest"]
+    state = "recede" if delta > 5 else ("approach" if delta < -5 else "stable")
+    return {
+        "state": state,
+        "compass_idx": _bearing_idx(ISLAND_CENTER[0], ISLAND_CENTER[1],
+                                    first["clat"], first["clon"]),
+        "closest_km": round(first["nearest"], 1),
+    }
+
+
+@app.route('/api/trend')
+def api_trend():
+    """Tendance île de la masse de sargasses (informatif ; ne change pas le risque)."""
+    conn = get_db()
+    try:
+        return jsonify(compute_drift_trend(conn))
+    finally:
+        conn.close()
 
 
 @app.route('/api/subscribe', methods=['POST'])

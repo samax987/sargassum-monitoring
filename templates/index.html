@@ -283,6 +283,11 @@
         .leaflet-popup-content { margin: 14px 18px; font-family: 'Inter', sans-serif; font-size: 13px; line-height: 1.6; }
         .leaflet-popup-content strong { color: #fff; font-size: 14px; }
         .leaflet-popup-close-button { color: #6c7a99 !important; }
+        /* Photos de l'observation bénévole dans la popup carte : miniatures côte à côte.
+           Avant : images pleine largeur empilées → popup plus haute que la carte, débordait sur mobile. */
+        .obs-photos { display: flex; gap: 6px; margin-top: 8px; }
+        .obs-photos a { flex: 1 1 0; min-width: 0; line-height: 0; }
+        .obs-photos img { width: 100%; height: 86px; object-fit: cover; border-radius: 6px; display: block; }
 
         /* ─── Légende ────────────────────────────────────────────────────── */
         .legend {
@@ -355,11 +360,12 @@
         }
         .forecast-meta {
             display: flex;
-            justify-content: space-between;
-            font-size: 0.78em;
+            flex-direction: column;   /* vent puis houle empilés : plus jamais de chiffre rogné sur petit écran */
+            align-items: center;
+            font-size: 0.8em;
             color: #fff;
             font-weight: 600;
-            gap: 4px;
+            gap: 3px;
         }
         .forecast-meta span { white-space: nowrap; }
         .forecast-wind::before { content: '💨 '; opacity: 0.7; }
@@ -692,11 +698,14 @@
                 const state = (I18N.obs_state && I18N.obs_state[o.risk]) || '';
                 obsBlock = `<br><span style="color:${oc};font-weight:600">📍 ${I18N.obs_seen} : ${state}</span>`
                          + ` <span style="opacity:.7">(${agoText(o.observed_at)})</span>`;
-                (o.photos || []).forEach(u => {
-                    obsBlock += `<br><a href="${u}" target="_blank" rel="noopener">`
-                              + `<img src="${u}" alt="photo" `
-                              + `style="width:100%;max-width:220px;border-radius:6px;margin-top:6px;display:block"></a>`;
-                });
+                if (o.photos && o.photos.length) {
+                    // Miniatures côte à côte (clic = photo en grand dans un nouvel onglet)
+                    obsBlock += `<div class="obs-photos">`
+                              + o.photos.map(u =>
+                                    `<a href="${u}" target="_blank" rel="noopener">`
+                                    + `<img src="${u}" alt="photo" loading="lazy"></a>`).join('')
+                              + `</div>`;
+                }
             }
             // Tendance île (la masse arrive ↗ / repart ↘) accolée à la distance
             let trendTxt = '';
@@ -705,12 +714,14 @@
             else if (tr && tr.state === 'approach') trendTxt = ` · ${I18N.trend_approach} ↗`;
 
             const marker = L.marker([beach.lat, beach.lon], { icon });
+            // Largeur de popup bornée à l'écran (sinon débordement sur mobile)
+            const popupMaxW = Math.min(280, (window.innerWidth || 360) - 40);
             marker.bindPopup(`
                 <strong>${beach.name.replace(/_/g, ' ')}</strong><br>
                 ${I18N.popup_risk} J+${day} : <span style="color:${color};font-weight:600">${I18N.risk[level]}</span><br>
                 ${I18N.popup_score} : ${dayData.regional_score}<br>
                 ${I18N.popup_closest} : <strong>${dayData.closest_km} km</strong>${trendTxt}${obsBlock}
-            `);
+            `, { maxWidth: popupMaxW });
             return marker;
         }
 

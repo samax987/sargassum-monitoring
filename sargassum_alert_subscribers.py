@@ -5,8 +5,9 @@ sargassum_alert_subscribers.py
 Envoie des alertes Telegram PERSONNALISEES aux abonnes du bot.
 
 Pour chaque utilisateur ayant souscrit a une ou plusieurs plages via
-@Sargasum_alerte_bot, envoie un message uniquement si l'une de ses
-plages est en risque medium ou high sur J+0 a J+2.
+@Sargasum_alerte_bot, envoie un message uniquement si des sargasses sont
+prevues SUR l'une de ses plages (presence, local_score) sur J+0 a J+2 —
+et non plus des qu'une masse entre dans la zone regionale (50 km).
 
 Complete sargassum_alert.py qui envoie le bulletin groupe au chat principal.
 
@@ -24,12 +25,17 @@ from pathlib import Path
 
 import requests
 
+from beaches import presence_label
+
 # ── Config ─────────────────────────────────────────────────────────────────────
 
 DB_PATH = Path(__file__).parent / "sargassum_data.db"
 ENV_PATH = Path(__file__).parent / ".env"
 ISLAND = "Saint-Barth"
-ALERT_MIN_RISK = "medium"
+# Déclenchement sur la PRÉSENCE (sur la plage), pas le régional : on n'alerte
+# que si des sargasses sont prévues sur la plage de l'abonné (cohérent avec le
+# badge et « Arrivée prévue »). "low" = dès les premières sargasses attendues.
+ALERT_MIN_PRESENCE = "low"
 ALERT_DAYS = [0, 1, 2]
 ALERT_HOUR_UTC = 6
 ALERT_TOLERANCE = 1
@@ -113,11 +119,12 @@ def load_subscriptions(conn) -> dict[int, list[tuple[str, str]]]:
 
 
 def load_beach_worst(conn, beach: str) -> dict | None:
-    """Retourne le pire risque pour une plage sur J+0 a J+2."""
+    """Retourne la pire PRÉSENCE prévue (sur la plage) pour une plage sur J+0 à J+2."""
     placeholders = ",".join("?" * len(ALERT_DAYS))
     rows = conn.execute(
         f"""
         SELECT day_offset, risk_level, ROUND(regional_score, 1) as score,
+               ROUND(local_score, 2) as local_score,
                ROUND(closest_km, 1) as closest_km
         FROM beach_risk_scores
         WHERE island = ? AND beach_name = ? AND day_offset IN ({placeholders})
@@ -127,9 +134,14 @@ def load_beach_worst(conn, beach: str) -> dict | None:
     ).fetchall()
     if not rows:
         return None
-    # Garde le pire
-    worst = max(rows, key=lambda r: RISK_RANK.get(r["risk_level"], 0))
-    return dict(worst)
+    # Présence (sur la plage) dérivée du local_score, on garde le pire jour
+    enriched = []
+    for r in rows:
+        d = dict(r)
+        d["presence"] = presence_label(r["local_score"])
+        enriched.append(d)
+    worst = max(enriched, key=lambda r: RISK_RANK.get(r["presence"], 0))
+    return worst
 
 
 # ── Telegram ───────────────────────────────────────────────────────────────────
@@ -156,18 +168,19 @@ def build_personal_message(user_name: str, alerted: list[tuple[str, dict]]) -> s
     """Compose le message pour un abonne avec uniquement ses plages en alerte."""
     lines = [
         f"🌊 <b>Alerte sargasses</b>",
-        f"Hello {user_name}, voici l'état de tes plages :\n",
+        f"Hello {user_name}, des sargasses sont prévues sur tes plages :\n",
     ]
+    when = {0: "aujourd'hui", 1: "demain"}
     for beach, info in alerted:
-        emoji = RISK_EMOJI[info["risk_level"]]
-        day = f"J+{info['day_offset']}"
-        prox = f"{info['closest_km']:.0f} km" if info["closest_km"] else "—"
+        emoji = RISK_EMOJI[info["presence"]]
+        d = info["day_offset"]
+        quand = when.get(d, f"J+{d}")
         beach_pretty = beach.replace("_", " ")
         lines.append(
-            f"  {emoji} <b>{beach_pretty}</b> — risque {RISK_FR[info['risk_level']]} "
-            f"({day}, à {prox})"
+            f"  {emoji} <b>{beach_pretty}</b> — arrivée prévue {quand} "
+            f"(niveau {RISK_FR[info['presence']]})"
         )
-    lines.append(f"\n🗺 Carte : {WEB_URL}")
+    lines.append(f"\n🗺 Détail sur la carte : {WEB_URL}")
     lines.append("ℹ️ Utilise /unsubscribe pour modifier tes abonnements")
     return "\n".join(lines)
 
@@ -210,7 +223,7 @@ def main():
     sent_count = 0
     skipped_count = 0
 
-    min_rank = RISK_RANK[ALERT_MIN_RISK]
+    min_rank = RISK_RANK[ALERT_MIN_PRESENCE]
 
     for chat_id, beach_list in subscriptions.items():
         user_name = beach_list[0][1] if beach_list else "ami"
@@ -221,7 +234,7 @@ def main():
             info = load_beach_worst(conn, beach_name)
             if not info:
                 continue
-            if RISK_RANK.get(info["risk_level"], 0) >= min_rank:
+            if RISK_RANK.get(info["presence"], 0) >= min_rank:
                 alerted.append((beach_name, info))
 
         # Pas d'alerte pour cet utilisateur
@@ -231,7 +244,7 @@ def main():
 
         # Anti-spam : hash du set d'alertes pour cet utilisateur
         payload = json.dumps(
-            [(b, info["risk_level"], info["day_offset"]) for b, info in alerted],
+            [(b, info["presence"], info["day_offset"]) for b, info in alerted],
             sort_keys=True,
         )
         payload_hash = hashlib.md5(payload.encode()).hexdigest()

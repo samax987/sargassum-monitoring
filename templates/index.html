@@ -668,6 +668,7 @@
                   <strong>${I18N.legend_title}</strong>
                   <div class="legend-row"><span class="legend-dot" style="background:#22c55e"></span>${I18N.risk.none}</div>
                   <div class="legend-row"><span class="legend-dot" style="background:#eab308"></span>${I18N.risk.low}</div>
+                  <div class="legend-row"><span class="legend-dot" style="background:#f59e0b"></span>${I18N.legend_watch}</div>
                   <div class="legend-row"><span class="legend-dot" style="background:#f97316"></span>${I18N.risk.medium}</div>
                   <div class="legend-row"><span class="legend-dot" style="background:#ef4444"></span>${I18N.risk.high}</div>
                   <small>${I18N.legend_note}</small>
@@ -688,11 +689,11 @@
             const dayData = beach.forecast.find(f => f.day_offset === day);
             if (!dayData) return null;
 
-            const color = dayData.presence_color;     // badge = présence SUR la plage
-            const level = dayData.presence;
-            const isHigh = level === 'high' || level === 'medium';
-            const pulseClass = isHigh ? 'pulse' : '';
-            // Masse encore au large : régional élevé mais plage pas (encore) touchée
+            const color = dayData.badge_color;        // badge final = présence + filet de sécurité
+            const level = dayData.badge;
+            const isAlert = level === 'high' || level === 'medium' || level === 'watch';
+            const pulseClass = isAlert ? 'pulse' : '';
+            // Masse au large (régional élevé, plage pas touchée) ; pas de tag si déjà en "Surveiller"
             const offshore = (dayData.risk_level === 'high' || dayData.risk_level === 'medium')
                           && (level === 'none' || level === 'low');
 
@@ -904,32 +905,32 @@
             const container = document.getElementById('beaches-list');
             container.innerHTML = '';
 
-            const rank = { high: 3, medium: 2, low: 1, none: 0 };
-            // Plages réellement touchées (présence) en haut, puis approche régionale
+            const rank = { high: 3, medium: 2, watch: 2, low: 1, none: 0 };
+            // Plages les plus à risque (badge final) en haut
             beaches.sort((a, b) =>
-                (rank[b.worst_3d_presence] - rank[a.worst_3d_presence])
+                (rank[b.worst_3d_badge] - rank[a.worst_3d_badge])
                 || (rank[b.worst_3d] - rank[a.worst_3d]));
 
             beaches.forEach(beach => {
                 const card = document.createElement('div');
                 card.className = 'beach';
-                card.style.setProperty('--risk-color', beach.worst_3d_presence_color);
+                card.style.setProperty('--risk-color', beach.worst_3d_badge_color);
                 card.onclick = () => map.flyTo([beach.lat, beach.lon], 16, { duration: 0.8 });
 
                 const days = beach.forecast.slice(0, 5);
                 const dots = days.map(d =>
-                    `<div class="day-dot" style="background:${d.presence_color}" title="J+${d.day_offset}: ${I18N.risk[d.presence]}"></div>`
+                    `<div class="day-dot" style="background:${d.badge_color}" title="J+${d.day_offset}: ${I18N.risk[d.badge]}"></div>`
                 ).join('');
 
-                // Tag « masse au large » : régional ≥ moyen mais plage pas (encore) touchée
-                const offshore = rank[beach.worst_3d] >= 2 && rank[beach.worst_3d_presence] <= 1;
+                // Tag « masse au large » : régional ≥ moyen, plage pas touchée et pas en « Surveiller »
+                const offshore = rank[beach.worst_3d] >= 2 && rank[beach.worst_3d_badge] <= 1;
                 const offshoreTag = offshore
                     ? `<span class="offshore-tag">⚠️ ${I18N.offshore_short}</span>` : '';
 
                 card.innerHTML = `
                     <div class="beach-header">
                         <div class="beach-name">${beach.name.replace(/_/g, ' ')}</div>
-                        <span class="beach-pill" style="background:${beach.worst_3d_presence_color}">${I18N.risk[beach.worst_3d_presence]}</span>
+                        <span class="beach-pill" style="background:${beach.worst_3d_badge_color}">${I18N.risk[beach.worst_3d_badge]}</span>
                     </div>
                     ${offshoreTag}
                     <div class="forecast-strip">${dots}</div>

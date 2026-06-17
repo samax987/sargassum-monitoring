@@ -155,6 +155,7 @@ def risk_to_color(level: str) -> str:
     return {
         'none':   '#22c55e',
         'low':    '#eab308',
+        'watch':  '#f59e0b',   # Surveiller : masse qui approche (pas encore sur la plage)
         'medium': '#f97316',
         'high':   '#ef4444',
     }.get(level, '#9ca3af')
@@ -164,6 +165,7 @@ def risk_to_fr(level: str) -> str:
     return {
         'none':   'Aucun',
         'low':    'Faible',
+        'watch':  'Surveiller',
         'medium': 'Moyen',
         'high':   'Fort',
     }.get(level, 'Inconnu')
@@ -220,8 +222,10 @@ def api_status():
         et c'est ce que consomment alertes Telegram / timeline / calibration.
       - presence (local, sigma=radius) : badge PUBLIC "sur la plage".
     """
-    from beaches import presence_label
+    from beaches import presence_label, display_badge
     conn = get_db()
+    # Tendance île (approche/éloignement) pour le filet de sécurité du badge
+    trend_state = compute_drift_trend(conn).get('state', 'unknown')
     cur = conn.execute("""
         SELECT s.beach_name,
                COALESCE(bc.lat, s.beach_lat) AS beach_lat,
@@ -254,6 +258,7 @@ def api_status():
                 'forecast': [],
             }
         presence = presence_label(row['local_score'])
+        badge = display_badge(presence, row['risk_level'], trend_state)
         beaches[name]['forecast'].append({
             'day_offset': row['day_offset'],
             # Régional (approche) — conservé pour le tag "masse au large" + alertes/timeline
@@ -263,16 +268,18 @@ def api_status():
             'regional_score': row['regional_score'],
             'closest_km': row['closest_km'],
             'local_score': row['local_score'],
-            # Présence (sur la plage) — pilote le badge public
+            # Présence brute (sur la plage)
             'presence': presence,
-            'presence_color': risk_to_color(presence),
-            'presence_label': risk_to_fr(presence),
+            # Badge public FINAL = présence + filet de sécurité (watch si masse qui approche)
+            'badge': badge,
+            'badge_color': risk_to_color(badge),
+            'badge_label': risk_to_fr(badge),
         })
 
     # Pire sur 3 jours : régional (approche -> tag "masse au large")
     # ET présence (badge public "sur la plage").
     for beach in beaches.values():
-        rank = {'none': 0, 'low': 1, 'medium': 2, 'high': 3}
+        rank = {'none': 0, 'low': 1, 'watch': 2, 'medium': 2, 'high': 3}
         worst = max(
             (f['risk_level'] for f in beach['forecast'][:3]),
             key=lambda l: rank.get(l, 0),
@@ -280,13 +287,14 @@ def api_status():
         beach['worst_3d'] = worst
         beach['worst_3d_color'] = risk_to_color(worst)
         beach['worst_3d_label'] = risk_to_fr(worst)
-        worst_pres = max(
-            (f['presence'] for f in beach['forecast'][:3]),
+        # Badge public final sur 3 jours (présence + filet de sécurité)
+        worst_badge = max(
+            (f['badge'] for f in beach['forecast'][:3]),
             key=lambda l: rank.get(l, 0),
         )
-        beach['worst_3d_presence'] = worst_pres
-        beach['worst_3d_presence_color'] = risk_to_color(worst_pres)
-        beach['worst_3d_presence_label'] = risk_to_fr(worst_pres)
+        beach['worst_3d_badge'] = worst_badge
+        beach['worst_3d_badge_color'] = risk_to_color(worst_badge)
+        beach['worst_3d_badge_label'] = risk_to_fr(worst_badge)
 
     conn.close()
     return jsonify({

@@ -293,6 +293,21 @@ def presence_label(local_score: float) -> str:
     return "none"
 
 
+def display_badge(presence: str, regional: str, trend_state: str) -> str:
+    """Badge public FINAL = présence, avec un filet de sécurité.
+
+    Si une masse est dans la zone (régional >= moyen) sans être encore sur la
+    plage (présence <= faible) ET qu'elle se RAPPROCHE → 'watch' (Surveiller),
+    pour ne jamais afficher un vert rassurant juste avant une arrivée.
+    Si elle s'éloigne/est stable, on garde la présence (vert quand c'est propre).
+    """
+    rank = {"none": 0, "low": 1, "medium": 2, "high": 3}
+    offshore = rank.get(regional, 0) >= 2 and rank.get(presence, 0) <= 1
+    if offshore and trend_state == "approach":
+        return "watch"
+    return presence
+
+
 def _score_all_beaches(
     positions: list,
     n_active: int,

@@ -1148,7 +1148,7 @@
             beaches.forEach(beach => {
                 const arr = formatArrival(beach);
                 const incoming = beach.series.find(s => s.hour_offset === beach.arrival_hour);
-                const color = incoming ? incoming.color : '#22c55e';
+                const color = incoming ? incoming.presence_color : '#22c55e';
                 const row = document.createElement('div');
                 row.className = 'beach';
                 row.style.setProperty('--risk-color', color);

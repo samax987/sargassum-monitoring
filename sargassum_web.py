@@ -388,7 +388,11 @@ def api_timeline():
     d'arrivée prévue (1er pas où risk_level >= medium).
     ?beach=Nom  → restreint à une plage.
     ?hours=N    → horizon en heures (défaut 48).
+
+    L'heure d'arrivée = 1er pas où la PRÉSENCE (local) atteint la plage, et non
+    plus l'entrée d'une masse dans la zone régionale (cohérent avec le badge).
     """
+    from beaches import presence_label
     try:
         horizon = int(request.args.get('hours', '48'))
     except ValueError:
@@ -415,6 +419,7 @@ def api_timeline():
         SELECT beach_name, beach_lat, beach_lon, hour_offset, day_offset,
                valid_time, risk_level,
                ROUND(regional_score, 1) AS regional_score,
+               ROUND(local_score, 2) AS local_score,
                ROUND(closest_km, 1) AS closest_km
         FROM beach_timeline
         WHERE island = ? AND computed_at = ? AND hour_offset <= ?{beach_clause}
@@ -437,6 +442,7 @@ def api_timeline():
                 'arrival_time': None,
                 'series': [],
             }
+        presence = presence_label(r['local_score'])
         b['series'].append({
             'hour_offset': r['hour_offset'],
             'day_offset': r['day_offset'],
@@ -445,9 +451,13 @@ def api_timeline():
             'color': risk_to_color(r['risk_level']),
             'label': risk_to_fr(r['risk_level']),
             'regional_score': r['regional_score'],
+            'local_score': r['local_score'],
+            'presence': presence,
+            'presence_color': risk_to_color(presence),
             'closest_km': r['closest_km'],
         })
-        if b['arrival_hour'] is None and rank.get(r['risk_level'], 0) >= 2:
+        # Arrivée SUR la plage = 1er pas où la présence (local) atteint au moins "faible"
+        if b['arrival_hour'] is None and rank.get(presence, 0) >= 1:
             b['arrival_hour'] = r['hour_offset']
             b['arrival_time'] = r['valid_time']
 

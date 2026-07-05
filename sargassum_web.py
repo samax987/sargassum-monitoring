@@ -101,6 +101,22 @@ contributors_db.init_db()
 register_contributor_routes(app)
 
 
+# ── CSP : nonce par requête, pour TOUTES les pages ──────────────────────────────
+# Le CSP n'autorise les <script> inline que s'ils portent le nonce de la requête.
+# Avant, seule la carte (index) générait ce nonce → sur les autres pages (dont le
+# formulaire /signaler) tout script inline était bloqué. On le génère désormais
+# pour chaque requête et on l'expose à tous les templates via {{ csp_nonce }}.
+@app.before_request
+def _ensure_csp_nonce():
+    if not getattr(g, "csp_nonce", None):
+        g.csp_nonce = secrets.token_urlsafe(16)
+
+
+@app.context_processor
+def _inject_csp_nonce():
+    return {"csp_nonce": getattr(g, "csp_nonce", "")}
+
+
 # ── Sécurité : en-têtes HTTP (défense en profondeur) ────────────────────────────
 # La CSP bloque tout script chargé depuis un domaine non autorisé : si un
 # <script src="https://domaine-malveillant/..."> était injecté dans la page,
@@ -114,13 +130,16 @@ def _set_security_headers(resp):
     # navigateur. Le nonce est régénéré à chaque requête (cf. index()).
     nonce = getattr(g, "csp_nonce", None)
     script_src = f"'self' 'nonce-{nonce}'" if nonce else "'self'"
+    # Turnstile (captcha anti-bot du formulaire de signalement) : son script et
+    # son iframe viennent de challenges.cloudflare.com → à autoriser explicitement.
     resp.headers["Content-Security-Policy"] = (
         "default-src 'self'; "
-        f"script-src {script_src}; "
+        f"script-src {script_src} https://challenges.cloudflare.com; "
         "style-src 'self' 'unsafe-inline' https://unpkg.com https://fonts.googleapis.com; "
         "font-src 'self' data: https://fonts.gstatic.com; "
         "img-src 'self' data: https:; "
-        "connect-src 'self' https://api.open-meteo.com https://marine-api.open-meteo.com; "
+        "connect-src 'self' https://api.open-meteo.com https://marine-api.open-meteo.com https://challenges.cloudflare.com; "
+        "frame-src https://challenges.cloudflare.com; "
         "object-src 'none'; base-uri 'self'; frame-ancestors 'self'"
     )
     resp.headers["X-Content-Type-Options"] = "nosniff"
@@ -494,18 +513,19 @@ def api_health():
 
 @app.route('/api/observations')
 def api_observations():
-    """Dernières observations terrain (bénévoles) APPROUVÉES, < 24 h, par plage SBH.
+    """Dernières observations terrain (bénévoles) APPROUVÉES, < 48 h, par plage SBH.
 
     Anonyme — complète la prévision du modèle sur la carte publique (le
     « dernier kilomètre » : ce qu'un humain a vraiment vu sur place).
+    Fenêtre 48 h : les tournées terrain se font tous les deux jours.
     """
-    obs = contributors_db.latest_public_observations(ISLAND, within_hours=24)
+    obs = contributors_db.latest_public_observations(ISLAND, within_hours=48)
     # Construit les URLs de photos côté serveur (le front n'a pas à connaître
     # le schéma d'URL ni le nombre de photos à l'avance).
     for b in obs.values():
         n = b.pop('n_photos', 0)
         b['photos'] = [f"/api/observation-photo/{b['obs_id']}/{i}" for i in range(n)]
-    return jsonify({'island': ISLAND, 'window_hours': 24, 'beaches': obs})
+    return jsonify({'island': ISLAND, 'window_hours': 48, 'beaches': obs})
 
 
 @app.route('/api/observation-photo/<int:obs_id>/<int:idx>')

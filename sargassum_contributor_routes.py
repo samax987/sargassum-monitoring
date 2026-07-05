@@ -27,10 +27,15 @@ import secrets
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
+
+# Fuseau de Saint-Barthélemy (UTC-4 toute l'année, pas d'heure d'été).
+# Les formulaires saisissent l'heure locale ; la DB reste en UTC.
+TZ_SBH = ZoneInfo("America/Guadeloupe")
 
 from flask import (
-    Blueprint, abort, redirect, render_template, request, send_from_directory,
-    session, url_for,
+    Blueprint, abort, g, redirect, render_template, request,
+    send_from_directory, session, url_for,
 )
 from werkzeug.exceptions import RequestEntityTooLarge
 from werkzeug.security import check_password_hash, generate_password_hash
@@ -46,6 +51,10 @@ ISLAND = "Saint-Barth"
 # Clés de risque valides (indépendantes de la langue ; libellés dans contrib_i18n)
 RISK_KEYS = {"none", "low", "medium", "high"}
 
+# Où sont les sargasses (indépendant de la langue ; libellés dans contrib_i18n).
+# Pertinent seulement s'il y a des sargasses (observed_risk != "none").
+LOCATION_KEYS = {"water", "beach", "both"}
+
 # Validation des identifiants
 USERNAME_RE = re.compile(r"^[A-Za-z0-9._-]{3,30}$")
 MIN_PASSWORD_LEN = 8
@@ -59,9 +68,12 @@ PHOTO_JPEG_QUALITY = 85
 MAX_PHOTOS = 3   # une plage ne tient pas dans un cadre + échouage localisé
 
 # Rate-limiting (en mémoire process ; suffisant pour ce volume)
-LOGIN_MAX, LOGIN_WINDOW_S = 5, 15 * 60          # 5 tentatives / 15 min / IP
+LOGIN_MAX, LOGIN_WINDOW_S = 8, 15 * 60          # 8 tentatives / 15 min / IP
 REGISTER_MAX, REGISTER_WINDOW_S = 5, 60 * 60    # 5 inscriptions / h / IP
 SUBMIT_MAX, SUBMIT_WINDOW_S = 20, 60 * 60       # 20 signalements / h / compte
+FORGOT_MAX, FORGOT_WINDOW_S = 5, 60 * 60        # 5 demandes de reset / h / IP
+CHPW_MAX, CHPW_WINDOW_S = 10, 15 * 60           # 10 changements / 15 min / compte
+ANON_SUBMIT_MAX, ANON_SUBMIT_WINDOW_S = 10, 60 * 60  # 10 signalements directs / h / IP
 
 _rate_buckets: dict[str, list[float]] = {}
 
@@ -84,6 +96,83 @@ def _client_ip() -> str:
     if xff:
         return xff.split(",")[0].strip()
     return request.remote_addr or "?"
+
+
+def _env_value(key: str, default: str = "") -> str:
+    """Lit une clé du .env (lecture manuelle, comme le reste du projet)."""
+    import os
+    env_path = Path(__file__).parent / ".env"
+    if env_path.exists():
+        for line in env_path.read_text().splitlines():
+            line = line.strip()
+            if line.startswith(f"{key}="):
+                return line.split("=", 1)[1].strip()
+    return os.environ.get(key, default)
+
+
+def _notify_admin_telegram(text: str) -> None:
+    """Prévient Sam sur Telegram (canal admin). Best-effort : toute erreur est
+    avalée — une panne Telegram ne doit JAMAIS bloquer le bénévole ni révéler
+    quoi que ce soit côté web.
+
+    Texte BRUT (pas de parse_mode) : le message contient des données saisies par
+    l'utilisateur (identifiant, nom) ; un caractère spécial ne doit pas faire
+    échouer l'envoi ni permettre d'injecter du formatage.
+    """
+    token = _env_value("TELEGRAM_TOKEN")
+    chat = _env_value("TELEGRAM_CHAT")
+    if not token or not chat:
+        return
+    try:
+        import requests
+        requests.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            data={"chat_id": chat, "text": text},
+            timeout=8,
+        )
+    except Exception:
+        logger.warning("Notification Telegram (reset) échouée", exc_info=False)
+
+
+def _turnstile_sitekey() -> str:
+    """Clé publique Turnstile (à mettre dans le widget). Vide si non configuré."""
+    return _env_value("TURNSTILE_SITEKEY")
+
+
+def _verify_turnstile() -> bool:
+    """Vérifie le captcha Cloudflare Turnstile du formulaire.
+
+    - Pas de secret configuré → True (on s'appuie sur honeypot + rate-limit +
+      modération ; permet de livrer la fonctionnalité avant que Sam ait les clés).
+    - Secret configuré mais jeton absent/invalide → False (probable bot).
+    - Cloudflare injoignable → True (fail-open : ne pas bloquer un vrai bénévole
+      sur une panne réseau ; la modération reste le filet de sécurité).
+    """
+    secret = _env_value("TURNSTILE_SECRET")
+    if not secret:
+        return True
+    token = request.form.get("cf-turnstile-response", "")
+    if not token:
+        # Diagnostic : aucun jeton = le widget ne s'est pas chargé/résolu côté
+        # client (souvent : domaine non autorisé pour la sitekey, ou CSP/réseau).
+        logger.warning("Turnstile : aucun jeton reçu (widget non résolu côté client)")
+        return False
+    try:
+        import requests
+        r = requests.post(
+            "https://challenges.cloudflare.com/turnstile/v0/siteverify",
+            data={"secret": secret, "response": token, "remoteip": _client_ip()},
+            timeout=8,
+        )
+        data = r.json()
+        if not data.get("success"):
+            # error-codes Cloudflare : la cause exacte du refus (ex.
+            # "invalid-input-secret", "hostname-mismatch", "timeout-or-duplicate").
+            logger.warning("Turnstile refusé par Cloudflare : %s", data.get("error-codes"))
+        return bool(data.get("success"))
+    except Exception:
+        logger.warning("Vérification Turnstile injoignable — on laisse passer")
+        return True
 
 
 def _rate_limit_ok(key: str, max_events: int, window_s: int) -> bool:
@@ -120,28 +209,57 @@ def _csrf_protect():
         abort(403)
 
 
+@contrib_bp.before_request
+def _force_password_change():
+    """Si un mdp temporaire est en cours (reset admin), on bloque tout tant que
+    le bénévole n'a pas choisi son propre mot de passe — sauf la page de
+    changement elle-même et la déconnexion (sinon boucle de redirection)."""
+    c = _current_contributor()
+    if not c or not c.get("must_change_password"):
+        return
+    if request.endpoint in ("contrib.change_password", "contrib.logout"):
+        return
+    return redirect(url_for("contrib.change_password"))
+
+
 def _current_contributor() -> dict | None:
-    """Contributeur connecté ET actif, sinon None (session invalidée si banni)."""
+    """Contributeur connecté ET actif, sinon None. Mis en cache sur `g` pour la
+    durée de la requête (plusieurs appels par requête : before_request + vue).
+
+    Invalidation de session renforcée :
+      - compte banni / supprimé  → None
+      - mot de passe changé depuis l'ouverture de la session (pwd_changed_at ≠
+        empreinte stockée à la connexion) → None. C'est le « déconnexion partout
+        sur changement de mot de passe » : un cookie volé devient inutile dès que
+        le mot de passe est modifié.
+    """
+    if "contrib_cached" in g:
+        return g.contrib_cached
+    result = None
     cid = session.get("contrib_id")
-    if not cid:
-        return None
-    c = contributors_db.get_by_id(cid)
-    if not c or c["status"] != contributors_db.ACCOUNT_ACTIVE:
-        return None
-    return c
+    if cid:
+        c = contributors_db.get_by_id(cid)
+        if c and c["status"] == contributors_db.ACCOUNT_ACTIVE:
+            if session.get("pwd_stamp") == c.get("pwd_changed_at"):
+                result = c
+    g.contrib_cached = result
+    return result
 
 
 def _start_session(contributor: dict) -> None:
     """Ouvre une session propre (anti-fixation) après une connexion réussie.
 
-    Conserve la langue choisie avant connexion.
+    Conserve la langue choisie avant connexion. Mémorise l'empreinte du mot de
+    passe (pwd_changed_at) : toute modification ultérieure invalide ce cookie.
     """
     lang = session.get("lang", "fr")
     session.clear()
     session["lang"] = lang
     session["contrib_id"] = contributor["id"]
+    session["pwd_stamp"] = contributor.get("pwd_changed_at")
     session.permanent = True
     session["_csrf"] = secrets.token_urlsafe(32)
+    g.pop("contrib_cached", None)  # force un recalcul propre
 
 
 def _sbh_beaches() -> list[str]:
@@ -161,11 +279,14 @@ def _sbh_beaches() -> list[str]:
 
 
 def _parse_observed_at(raw: str) -> str | None:
-    """Parse un champ datetime-local. Retourne ISO (secondes) ou None si invalide.
+    """Parse un champ datetime-local (heure LOCALE Saint-Barth, UTC-4).
 
-    Tolère un large créneau [maintenant-30j, maintenant+1j] : assez souple pour
-    le décalage horaire SBH (UTC-4) et de petites dérives d'horloge, assez strict
-    pour rejeter les fautes de frappe évidentes (année suivante, etc.).
+    Le formulaire affiche et saisit l'heure de Saint-Barth (celle du téléphone) ;
+    on convertit ici en UTC avant stockage, car toute la chaîne (DB, dérive,
+    « il y a Xh » sur la carte) travaille en UTC.
+    Retourne ISO UTC (secondes) ou None si invalide.
+    Tolère [maintenant-30j, maintenant+1j] : souple pour de petites dérives
+    d'horloge, strict pour rejeter les fautes de frappe évidentes.
     """
     raw = (raw or "").strip()
     now = datetime.now(timezone.utc)
@@ -174,7 +295,7 @@ def _parse_observed_at(raw: str) -> str | None:
     dt = None
     for fmt in ("%Y-%m-%dT%H:%M", "%Y-%m-%dT%H:%M:%S"):
         try:
-            dt = datetime.strptime(raw, fmt).replace(tzinfo=timezone.utc)
+            dt = datetime.strptime(raw, fmt).replace(tzinfo=TZ_SBH).astimezone(timezone.utc)
             break
         except ValueError:
             continue
@@ -186,7 +307,9 @@ def _parse_observed_at(raw: str) -> str | None:
 
 
 def _now_local() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M")
+    # Pré-remplissage du champ date/heure : heure de Saint-Barth (pas UTC),
+    # pour correspondre à ce qu'affiche le téléphone du contributeur.
+    return datetime.now(TZ_SBH).strftime("%Y-%m-%dT%H:%M")
 
 
 def _process_photo(file_storage) -> str | None:
@@ -228,6 +351,98 @@ def home():
         contributor=_current_contributor(),
         csrf_token=_ensure_csrf(),
     )
+
+
+@contrib_bp.route("/signaler", methods=["GET", "POST"])
+def report_anon():
+    """Signalement DIRECT, sans compte — le chemin par défaut, zéro friction.
+
+    Entre dans la MÊME file de modération que les signalements des comptes
+    (statut 'pending') et n'influence le modèle qu'après validation de Sam.
+    Anti-abus : honeypot + rate-limit par IP + Turnstile (si configuré) +
+    modération humaine systématique (rien de public sans le feu vert de Sam).
+    """
+    lang = _lang()
+    t = get_strings(lang)
+
+    def _render(**kw):
+        return render_template(
+            "contrib_report_anon.html", t=t, lang=lang,
+            contributor=_current_contributor(), beaches=_sbh_beaches(),
+            csrf_token=_ensure_csrf(), now_local=_now_local(),
+            # Plage présélectionnée quand on arrive depuis la bulle de la carte (?beach=…)
+            preselected=request.args.get("beach"),
+            turnstile_sitekey=_turnstile_sitekey(), **kw)
+
+    if request.method == "GET":
+        return _render()
+
+    # Honeypot : on répond « ok » sans rien enregistrer (ne pas renseigner le bot).
+    if request.form.get("website"):
+        logger.info("Signalement direct honeypot (IP %s)", _client_ip())
+        return _render(done=True)
+
+    if not _rate_limit_ok(f"anon:{_client_ip()}", ANON_SUBMIT_MAX, ANON_SUBMIT_WINDOW_S):
+        return _render(error=t["err_rate_submit"]), 429
+
+    if not _verify_turnstile():
+        return _render(error=t["err_captcha"]), 400
+
+    beaches = _sbh_beaches()
+    beach_name = (request.form.get("beach_name") or "").strip()
+    observed_risk = (request.form.get("observed_risk") or "").strip()
+    sarg_location = (request.form.get("sarg_location") or "").strip() or None
+    observed_at = _parse_observed_at(request.form.get("observed_at"))
+    # Pas de champ « remarques » sur le formulaire anonyme : on ignore toute
+    # valeur éventuellement bricolée dans la requête (réduction de surface).
+    reporter_name = (request.form.get("reporter_name") or "").strip()[:40] or None
+
+    coverage_raw = (request.form.get("coverage_pct") or "").strip()
+    coverage = None
+    if coverage_raw:
+        try:
+            coverage = max(0, min(100, int(float(coverage_raw))))
+        except ValueError:
+            coverage = None
+
+    error = None
+    if beach_name not in beaches:
+        error = t["err_beach"]
+    elif observed_risk not in RISK_KEYS:
+        error = t["err_risk"]
+    elif observed_at is None:
+        error = t["err_date"]
+
+    # « Où » : pertinent seulement s'il y a des sargasses. Optionnel côté serveur
+    # (le JS le rend obligatoire à l'écran) ; on neutralise toute valeur hors
+    # liste — jamais bloquer un signalement valide pour ce seul champ.
+    if observed_risk == "none" or sarg_location not in LOCATION_KEYS:
+        sarg_location = None
+
+    # Photos optionnelles (validées seulement si le reste est valide).
+    photos: list[str] = []
+    if error is None:
+        try:
+            for fs in request.files.getlist("photos")[:MAX_PHOTOS]:
+                p = _process_photo(fs)
+                if p:
+                    photos.append(p)
+        except ValueError:
+            error = t["err_photo"]
+
+    if error:
+        return _render(error=error), 400
+
+    contributors_db.add_observation(
+        contributor_id=contributors_db.anonymous_contributor_id(),
+        observed_at=observed_at, island=ISLAND, beach_name=beach_name,
+        observed_risk=observed_risk, coverage_pct=coverage,
+        sarg_location=sarg_location, notes=None,
+        client_ip=_client_ip(), photos=photos, reporter_name=reporter_name,
+    )
+    logger.info("Signalement DIRECT (anonyme) : %s / %s (risque %s, lieu %s, %d photo(s))",
+                ISLAND, beach_name, observed_risk, sarg_location or "?", len(photos))
+    return _render(done=True)
 
 
 @contrib_bp.route("/inscription", methods=["GET", "POST"])
@@ -287,7 +502,8 @@ def register():
     logger.info("Nouveau contributeur #%s (%s) — en attente de validation",
                 new_id, username)
     return render_template("contrib_register.html", t=t, lang=lang,
-                           csrf_token=_ensure_csrf(), registered=True)
+                           csrf_token=_ensure_csrf(), registered=True,
+                           username=username)
 
 
 @contrib_bp.route("/connexion", methods=["GET", "POST"])
@@ -309,7 +525,9 @@ def login():
 
     username = (request.form.get("username") or "").strip()
     password = request.form.get("password") or ""
-    c = contributors_db.get_by_username(username)
+    # Insensible à la casse : « samuel », « Samuel », « SAMUEL » → même compte.
+    # C'était le piège n°1 qui bloquait les bénévoles.
+    c = contributors_db.get_by_username_ci(username)
 
     # Anti-énumération : message générique tant que les identifiants ne sont pas
     # valides. Le statut (en attente / refusé) n'est révélé qu'avec le bon
@@ -338,6 +556,116 @@ def logout():
     session.clear()
     session["lang"] = lang  # conserve la langue après déconnexion
     return redirect(url_for("contrib.home"))
+
+
+@contrib_bp.route("/mot-de-passe-oublie", methods=["GET", "POST"])
+def forgot_password():
+    """Mot de passe oublié — DEMANDE, jamais reset automatique.
+
+    Sans canal de vérification d'identité (pas d'e-mail/SMS des bénévoles), un
+    reset self-service serait une faille de vol de compte. Ici, la demande :
+      1) prévient Sam sur Telegram + s'ajoute à la file du dashboard,
+      2) affiche TOUJOURS le même message (anti-énumération).
+    Sam réinitialise ensuite manuellement (mot de passe temporaire).
+    """
+    lang = _lang()
+    t = get_strings(lang)
+    if _current_contributor():
+        return redirect(url_for("contrib.observer"))
+
+    if request.method == "GET":
+        return render_template("contrib_forgot.html", t=t, lang=lang,
+                               csrf_token=_ensure_csrf())
+
+    if not _rate_limit_ok(f"forgot:{_client_ip()}", FORGOT_MAX, FORGOT_WINDOW_S):
+        return render_template("contrib_forgot.html", t=t, lang=lang,
+                               csrf_token=_ensure_csrf(),
+                               error=t["err_rate_forgot"]), 429
+
+    identifier = (request.form.get("identifier") or "").strip()[:60]
+    if identifier:
+        accounts = contributors_db.find_accounts_for_reset(identifier)
+        for acc in accounts:
+            contributors_db.add_reset_request(acc["id"], client_ip=_client_ip())
+        if accounts:
+            who = ", ".join(f"{a['display_name']} ({a['username']})" for a in accounts)
+            _notify_admin_telegram(
+                "🔑 Sargasses — demande de mot de passe oublié\n"
+                f"Compte(s) : {who}\n"
+                "→ Réinitialise-le dans le dashboard, page « Contributeurs »."
+            )
+            logger.info("Demande reset : %d compte(s) pour identifiant saisi",
+                        len(accounts))
+        else:
+            # Canal privé de Sam (pas d'énumération côté web) : on l'aide à
+            # retrouver la personne qui s'est trompée d'identifiant.
+            _notify_admin_telegram(
+                "🔑 Sargasses — mot de passe oublié\n"
+                f"Aucun compte ne correspond à « {identifier} ».\n"
+                "Identifiant mal orthographié ? À vérifier avec la personne."
+            )
+            logger.info("Demande reset sans correspondance")
+
+    # Même réponse dans tous les cas.
+    return render_template("contrib_forgot.html", t=t, lang=lang,
+                           csrf_token=_ensure_csrf(), done=True)
+
+
+@contrib_bp.route("/changer-mot-de-passe", methods=["GET", "POST"])
+def change_password():
+    """Changement de mot de passe par le bénévole connecté.
+
+    Sert aussi d'étape obligatoire après un reset admin (must_change_password) :
+    le before_request _force_password_change redirige ici tant que ce n'est pas
+    fait. Demande le mot de passe actuel (preuve de possession), puis applique le
+    nouveau — ce qui invalide les autres sessions (cf. set_password_hash).
+    """
+    lang = _lang()
+    t = get_strings(lang)
+    c = _current_contributor()
+    if not c:
+        return redirect(url_for("contrib.login"))
+
+    forced = bool(c.get("must_change_password"))
+
+    if request.method == "GET":
+        return render_template("contrib_change_pw.html", t=t, lang=lang,
+                               contributor=c, csrf_token=_ensure_csrf(),
+                               forced=forced)
+
+    if not _rate_limit_ok(f"chpw:{c['id']}", CHPW_MAX, CHPW_WINDOW_S):
+        return render_template("contrib_change_pw.html", t=t, lang=lang,
+                               contributor=c, csrf_token=_ensure_csrf(),
+                               forced=forced, error=t["err_rate_login"]), 429
+
+    current = request.form.get("current_password") or ""
+    new = request.form.get("new_password") or ""
+    new2 = request.form.get("new_password2") or ""
+
+    error = None
+    if not check_password_hash(c["password_hash"], current):
+        error = t["err_chpw_current"]
+    elif len(new) < MIN_PASSWORD_LEN:
+        error = t["err_pw_len"]
+    elif new != new2:
+        error = t["err_pw_match"]
+    elif check_password_hash(c["password_hash"], new):
+        error = t["err_pw_same"]
+
+    if error:
+        return render_template("contrib_change_pw.html", t=t, lang=lang,
+                               contributor=c, csrf_token=_ensure_csrf(),
+                               forced=forced, error=error), 400
+
+    contributors_db.set_password_hash(
+        c["id"], generate_password_hash(new), must_change=False)
+    # La session courante reste valide : on resynchronise son empreinte (les
+    # AUTRES sessions, elles, sont désormais invalides).
+    _start_session(contributors_db.get_by_id(c["id"]))
+    logger.info("Mot de passe changé pour le contributeur #%s", c["id"])
+    return render_template("contrib_change_pw.html", t=t, lang=lang,
+                           contributor=_current_contributor(),
+                           csrf_token=_ensure_csrf(), forced=False, done=True)
 
 
 @contrib_bp.route("/observer")

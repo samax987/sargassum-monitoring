@@ -35,6 +35,22 @@
         {% endfor %}
       </div>
 
+      <!-- Où sont les sargasses ? N'a de sens que s'il y en a : ce bloc est
+           masqué par JS quand « Aucune sargasse » est coché. Pas de `required`
+           en dur (un champ caché requis bloquerait la soumission) : le JS pose
+           required dynamiquement et la validation serveur fait foi. -->
+      <div id="location-block">
+        <label>{{ t.obs_location_label }}</label>
+        <div class="risk-list">
+          {% for key, label in t.location_options %}
+            <label class="risk-opt">
+              <input type="radio" name="sarg_location" value="{{ key }}">
+              <span>{{ label }}</span>
+            </label>
+          {% endfor %}
+        </div>
+      </div>
+
       <label for="coverage_pct">{{ t.obs_coverage_label }}
         <span class="opt">{{ t.obs_coverage_hint }}</span></label>
       <input type="number" id="coverage_pct" name="coverage_pct" min="0" max="100" step="5"
@@ -42,6 +58,12 @@
 
       <label for="observed_at">{{ t.obs_datetime_label }}</label>
       <input type="datetime-local" id="observed_at" name="observed_at" value="{{ now_local }}">
+
+      <label for="photos_cam">{{ t.obs_photo_cam }}
+        <span class="opt">{{ t.obs_photo_cam_hint }}</span></label>
+      <!-- capture="environment" : ouvre directement l'appareil photo arrière sur mobile.
+           Même name="photos" que la galerie : le serveur fusionne (max 3 au total). -->
+      <input type="file" id="photos_cam" name="photos" accept="image/*" capture="environment" multiple>
 
       <label for="photos">{{ t.obs_photo_label }}
         <span class="opt">{{ t.obs_photo_hint }}</span></label>
@@ -59,4 +81,27 @@
       </div>
     </form>
   </div>
+
+  <script>
+    // « Où ? » apparaît dès qu'une quantité de sargasses est choisie, et
+    // disparaît si l'on coche « Aucune sargasse ». Sans JS, le bloc reste
+    // visible et le serveur valide quand même (dégradation propre).
+    (function () {
+      var locBlock = document.getElementById('location-block');
+      var riskRadios = document.querySelectorAll('input[name="observed_risk"]');
+      var locRadios = document.querySelectorAll('input[name="sarg_location"]');
+      function sync() {
+        var checked = document.querySelector('input[name="observed_risk"]:checked');
+        var hasSarg = checked && checked.value !== 'none';
+        var isNone = checked && checked.value === 'none';
+        locBlock.hidden = isNone;            // masqué seulement si « Aucune »
+        locRadios.forEach(function (r) {
+          r.required = hasSarg;              // obligatoire dès qu'il y a des sargasses
+          if (isNone) r.checked = false;     // on nettoie le choix devenu sans objet
+        });
+      }
+      riskRadios.forEach(function (r) { r.addEventListener('change', sync); });
+      sync();
+    })();
+  </script>
 {% endblock %}

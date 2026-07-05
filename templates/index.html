@@ -122,7 +122,11 @@
         .time-control { display: flex; gap: 4px; margin-bottom: 8px; }
         .hour-control { margin-top: 6px; }
         .hour-row { display: flex; align-items: center; gap: 8px; }
-        .hour-row input[type=range] { flex: 1; accent-color: #f59e0b; cursor: pointer; }
+        .hour-row input[type=range] { flex: 1; -webkit-appearance: none; appearance: none; height: 28px; background: transparent; cursor: pointer; }
+        .hour-row input[type=range]::-webkit-slider-runnable-track { height: 6px; border-radius: 3px; background: #475569; }
+        .hour-row input[type=range]::-moz-range-track { height: 6px; border-radius: 3px; background: #475569; }
+        .hour-row input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 24px; height: 24px; margin-top: -9px; border-radius: 50%; background: #f59e0b; border: 2px solid #1a1a1a; cursor: pointer; }
+        .hour-row input[type=range]::-moz-range-thumb { width: 24px; height: 24px; border-radius: 50%; background: #f59e0b; border: 2px solid #1a1a1a; cursor: pointer; }
         #play-btn { flex: 0 0 auto; width: 28px; height: 28px; border: none; border-radius: 50%; background: #f59e0b; color: #1a1a1a; font-size: 12px; cursor: pointer; display: flex; align-items: center; justify-content: center; padding: 0; }
         #play-btn:hover { background: #fbbf24; }
         .hour-label { font-size: 12px; color: #f59e0b; font-weight: 600; text-align: center; margin-top: 2px; }
@@ -194,7 +198,9 @@
             color: #6c7a99;
             line-height: 1.6;
         }
-        .footer-links a { color: #e94560; text-decoration: none; font-weight: 500; }
+        .footer-links a { color: #e94560; text-decoration: none; font-weight: 500; display: inline-block; padding: 8px 4px; }
+        /* FR/EN : zone tactile élargie (mobile-first) */
+        .langsw a { padding: 8px 9px; line-height: 1; }
 
         /* ─── MARKERS ────────────────────────────────────────────────────── */
         .beach-marker {
@@ -443,8 +449,8 @@
 
             /* Zones tactiles un peu plus généreuses */
             .time-btn { padding: 9px 4px; font-size: 13px; }
-            .speed-btn { padding: 5px 12px; font-size: 12px; }
-            #play-btn { width: 34px; height: 34px; font-size: 14px; }
+            .speed-btn { padding: 9px 16px; font-size: 13px; }
+            #play-btn { width: 44px; height: 44px; font-size: 16px; }
             #region-btn { padding: 10px; font-size: 13px; }
             .toast { font-size: 12px; bottom: 16px; max-width: 90%; }
         }
@@ -555,16 +561,9 @@
                 </div>
             </div>
 
-            <div class="section">
-                <h2>{{ t.h_arrival }}</h2>
-                <div id="timeline-list" class="loading">
-                    <div class="skeleton" style="height:48px;margin-bottom:8px;"></div>
-                    <div class="skeleton" style="height:48px;"></div>
-                </div>
-                <div style="font-size:11px;color:#9ca3af;margin-top:6px;">
-                    {{ t.arrival_note }}
-                </div>
-            </div>
+            <!-- Section « Arrivée prévue sur la plage » retirée temporairement (juillet 2026) :
+                 l'heure exacte d'arrivée n'est pas encore assez fiable pour être montrée au public.
+                 Le JS (loadTimeline/renderTimeline) est conservé pour réactiver plus tard. -->
 
             <div class="section">
                 <h2>{{ t.h_alerts }}</h2>
@@ -617,11 +616,14 @@
             if (!o) return '';
             const color = RISK_COLORS[o.risk] || '#888';
             const state = (I18N.obs_state && I18N.obs_state[o.risk]) || '';
+            // Localisation (dans l'eau / sur la plage) : l'info qui aide à décider de venir.
+            const loc = (o.location && I18N.obs_loc && I18N.obs_loc[o.location]) || '';
+            const locTxt = loc ? ` <span class="obs-loc">(${loc})</span>` : '';
             const photos = o.photos || [];
             const photo = photos.length
                 ? ` · <a href="${photos[0]}" target="_blank" rel="noopener">📷 ${I18N.obs_photo}${photos.length > 1 ? ' ×' + photos.length : ''}</a>`
                 : '';
-            return `<div class="obs-line">📍 ${I18N.obs_seen} <strong style="color:${color}">${state}</strong>`
+            return `<div class="obs-line">📍 ${I18N.obs_seen} <strong style="color:${color}">${state}</strong>${locTxt}`
                  + ` <span class="obs-meta">${agoText(o.observed_at)} ${I18N.obs_by}${photo}</span></div>`;
         }
 
@@ -725,7 +727,9 @@
             if (o) {
                 const oc = RISK_COLORS[o.risk] || '#888';
                 const state = (I18N.obs_state && I18N.obs_state[o.risk]) || '';
-                obsBlock = `<br><span style="color:${oc};font-weight:600">📍 ${I18N.obs_seen} : ${state}</span>`
+                const loc = (o.location && I18N.obs_loc && I18N.obs_loc[o.location]) || '';
+                const locTxt = loc ? ` (${loc})` : '';
+                obsBlock = `<br><span style="color:${oc};font-weight:600">📍 ${I18N.obs_seen} : ${state}${locTxt}</span>`
                          + ` <span style="opacity:.7">(${agoText(o.observed_at)})</span>`;
                 if (o.photos && o.photos.length) {
                     // Miniatures côte à côte (clic = photo en grand dans un nouvel onglet)
@@ -752,6 +756,9 @@
                 <strong>${beach.name.replace(/_/g, ' ')}</strong><br>
                 ${I18N.popup_risk} J+${day} : <span style="color:${color};font-weight:600">${I18N.risk[level]}</span><br>
                 ${offshoreHtml}${I18N.popup_closest} : <strong>~${Math.round(dayData.closest_km)} km</strong>${trendTxt}${obsBlock}
+                <br><a href="/contribuer/signaler?beach=${encodeURIComponent(beach.name)}"
+                       style="display:inline-block;margin-top:6px;color:#60a5fa;font-weight:600;text-decoration:none">
+                    📷 ${I18N.popup_report}</a>
             `, { maxWidth: popupMaxW });
             return marker;
         }
@@ -1192,10 +1199,10 @@
         loadStatus();
         loadHealth();
         loadWeather();
-        loadTimeline();
+        // loadTimeline() désactivé avec la section « Arrivée prévue » (juillet 2026)
         loadObservations();
         loadTrend();
-        setInterval(() => { loadStatus(); loadHealth(); loadTimeline(); loadObservations(); loadTrend(); }, 5 * 60 * 1000);
+        setInterval(() => { loadStatus(); loadHealth(); loadObservations(); loadTrend(); }, 5 * 60 * 1000);
         setInterval(loadWeather, 15 * 60 * 1000);
     </script>
 </body>

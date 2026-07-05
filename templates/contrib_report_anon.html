@@ -1,0 +1,118 @@
+{% extends "contrib_base.html" %}
+{% block title %}{{ t.anon_title }}{% endblock %}
+{% block content %}
+  <h1>{{ t.anon_title }}</h1>
+
+  {% if done %}
+    <div class="alert ok">{{ t.anon_success }}</div>
+    <div class="btn-row">
+      <a class="btn" href="{{ url_for('contrib.report_anon') }}">{{ t.anon_another }}</a>
+      <a class="btn ghost" href="{{ url_for('index') }}">{{ t.nav_map }}</a>
+    </div>
+  {% else %}
+    <p class="lead">{{ t.anon_lead }}</p>
+    {% if error %}<div class="alert error">{{ error }}</div>{% endif %}
+
+    <div class="card">
+      <form method="post" action="{{ url_for('contrib.report_anon') }}"
+            enctype="multipart/form-data">
+        <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+
+        <label for="beach_name">{{ t.obs_beach_label }}</label>
+        <select id="beach_name" name="beach_name" required>
+          <option value="" disabled {% if not preselected %}selected{% endif %}>{{ t.obs_beach_placeholder }}</option>
+          {% for b in beaches %}
+            <option value="{{ b }}" {% if b == preselected %}selected{% endif %}>{{ b.replace('_', ' ') }}</option>
+          {% endfor %}
+        </select>
+
+        <label>{{ t.obs_risk_label }}</label>
+        <div class="risk-list">
+          {% for key, label in t.risk_options %}
+            <label class="risk-opt">
+              <input type="radio" name="observed_risk" value="{{ key }}" required>
+              <span>{{ label }}</span>
+            </label>
+          {% endfor %}
+        </div>
+
+        <!-- Où sont les sargasses ? Masqué par JS quand « Aucune sargasse » est
+             coché. Pas de `required` en dur (un champ caché requis bloquerait la
+             soumission) : le JS le pose, et la validation serveur fait foi. -->
+        <div id="location-block">
+          <label>{{ t.obs_location_label }}</label>
+          <div class="risk-list">
+            {% for key, label in t.location_options %}
+              <label class="risk-opt">
+                <input type="radio" name="sarg_location" value="{{ key }}">
+                <span>{{ label }}</span>
+              </label>
+            {% endfor %}
+          </div>
+        </div>
+
+        <label for="coverage_pct">{{ t.obs_coverage_label }}
+          <span class="opt">{{ t.obs_coverage_hint }}</span></label>
+        <input type="number" id="coverage_pct" name="coverage_pct" min="0" max="100" step="5"
+               inputmode="numeric" placeholder="{{ t.obs_coverage_ph }}">
+
+        <label for="observed_at">{{ t.obs_datetime_label }}</label>
+        <input type="datetime-local" id="observed_at" name="observed_at" value="{{ now_local }}">
+
+        <label for="photos_cam">{{ t.obs_photo_cam }}
+          <span class="opt">{{ t.obs_photo_cam_hint }}</span></label>
+        <!-- capture="environment" : ouvre directement l'appareil photo arrière sur mobile.
+             Même name="photos" que la galerie : le serveur fusionne (max 3 au total). -->
+        <input type="file" id="photos_cam" name="photos" accept="image/*" capture="environment" multiple>
+
+        <label for="photos">{{ t.obs_photo_label }}
+          <span class="opt">{{ t.obs_photo_hint }}</span></label>
+        <input type="file" id="photos" name="photos" accept="image/*" multiple>
+        <p class="lead" style="font-size:.82rem;margin-top:6px">{{ t.obs_photo_consent }}</p>
+
+        <label for="reporter_name">{{ t.anon_name_label }}
+          <span class="opt">{{ t.anon_name_hint }}</span></label>
+        <input type="text" id="reporter_name" name="reporter_name" maxlength="40">
+
+        <!-- Champ piège anti-robot : laisse-le vide -->
+        <div class="hp" aria-hidden="true">
+          <label for="website">{{ t.hp_label }}</label>
+          <input type="text" id="website" name="website" tabindex="-1" autocomplete="off">
+        </div>
+
+        {% if turnstile_sitekey %}
+          <div class="cf-turnstile" data-sitekey="{{ turnstile_sitekey }}"
+               style="margin-top:16px"></div>
+          <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
+        {% endif %}
+
+        <div class="btn-row">
+          <button class="btn block" type="submit">{{ t.btn_submit_obs }}</button>
+        </div>
+      </form>
+    </div>
+
+    <script nonce="{{ csp_nonce }}">
+      // « Où ? » apparaît dès qu'une quantité de sargasses est choisie, et
+      // disparaît si l'on coche « Aucune sargasse ». Sans JS, le bloc reste
+      // visible et le serveur valide quand même (dégradation propre).
+      (function () {
+        var locBlock = document.getElementById('location-block');
+        var riskRadios = document.querySelectorAll('input[name="observed_risk"]');
+        var locRadios = document.querySelectorAll('input[name="sarg_location"]');
+        function sync() {
+          var checked = document.querySelector('input[name="observed_risk"]:checked');
+          var hasSarg = checked && checked.value !== 'none';
+          var isNone = checked && checked.value === 'none';
+          locBlock.hidden = isNone;
+          locRadios.forEach(function (r) {
+            r.required = hasSarg;
+            if (isNone) r.checked = false;
+          });
+        }
+        riskRadios.forEach(function (r) { r.addEventListener('change', sync); });
+        sync();
+      })();
+    </script>
+  {% endif %}
+{% endblock %}

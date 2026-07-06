@@ -206,6 +206,15 @@ def _csrf_valid() -> bool:
 def _csrf_protect():
     # CSRF uniquement sur les POST du portail contributeurs.
     if request.method == "POST" and not _csrf_valid():
+        # Cas réel terrain (juillet 2026) : certains navigateurs mobiles (Brave…)
+        # ne renvoient pas le cookie de session → pas de jeton CSRF possible →
+        # 403 sur le signalement anonyme. Pour CE formulaire-là uniquement, et
+        # seulement quand il n'y a AUCUNE session (donc rien à détourner), on
+        # laisse passer : il reste couvert par honeypot + rate-limit + Turnstile
+        # + modération humaine systématique. Les routes de compte gardent le
+        # CSRF strict.
+        if request.endpoint == "contrib.report_anon" and "_csrf" not in session:
+            return
         abort(403)
 
 

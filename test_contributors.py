@@ -198,10 +198,15 @@ class TestPhotosEtListes(ContributorsDBTestCase):
     """Photo jointe et vues listees."""
 
     def test_photo_path_persiste(self):
+        # API multi-photos (juin 2026) : on passe une liste `photos` ;
+        # la première est copiée dans photo_path (rétro-compat ancien schéma).
         cid = self._new_contributor(status=cdb.ACCOUNT_ACTIVE)
-        oid = self._new_observation(cid, photo_path="contrib_photos/abcd1234.jpg")
+        oid = self._new_observation(cid, photos=["contrib_photos/abcd1234.jpg",
+                                                 "contrib_photos/efgh5678.jpg"])
         obs = cdb.get_observation(oid, db_path=self.db_path)
         self.assertEqual(obs["photo_path"], "contrib_photos/abcd1234.jpg")
+        self.assertEqual(cdb.photos_from_row(obs),
+                         ["contrib_photos/abcd1234.jpg", "contrib_photos/efgh5678.jpg"])
 
     def test_observation_sans_photo(self):
         cid = self._new_contributor(status=cdb.ACCOUNT_ACTIVE)

@@ -31,6 +31,8 @@ captures/
 *.bak2
 *.bak-*
 *.before_wind
+_backup_*/
+_bk_*/
 cron.log.*
 venv/
 .claude/

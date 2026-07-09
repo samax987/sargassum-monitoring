@@ -391,7 +391,7 @@ MAP_TRANSLATIONS: dict[str, dict] = {
         "legend_watch": "Surveiller — masse qui approche",
         "popup_risk": "Risque",
         "popup_score": "Score régional",
-        "popup_closest": "Sargasses les plus proches",
+        "popup_closest": "Sargasses les plus proches de cette plage",
         "popup_report": "Signaler l'état de cette plage",
         "risk_note": "Le badge indique les sargasses sur la plage 🏖️. « Masse au large » = elles approchent mais ne sont pas encore arrivées. L'observation 📍 d'un bénévole sur place fait foi.",
         "offshore_short": "Masse au large",
@@ -424,7 +424,7 @@ MAP_TRANSLATIONS: dict[str, dict] = {
         "trend_banner_recede": "🌊 La masse de sargasses s'éloigne (côté {dir}) ↘",
         "trend_banner_approach": "🌊 Une masse de sargasses se rapproche (côté {dir}) ↗",
         "trend_banner_stable": "🌊 Sargasses stables autour de l'île →",
-        "trend_closest": "la plus proche à {km} km",
+        "trend_closest": "la plus proche de l'île à {km} km",
     },
     "en": {
         "html_lang": "en",
@@ -464,7 +464,7 @@ MAP_TRANSLATIONS: dict[str, dict] = {
         "legend_watch": "Watch — incoming mass",
         "popup_risk": "Risk",
         "popup_score": "Regional score",
-        "popup_closest": "Nearest sargassum",
+        "popup_closest": "Nearest sargassum to this beach",
         "popup_report": "Report this beach's condition",
         "risk_note": "The badge shows sargassum on the beach 🏖️. “Mass offshore” = it's approaching but hasn't arrived yet. An on-site volunteer report 📍 is the ground truth.",
         "offshore_short": "Mass offshore",
@@ -497,7 +497,7 @@ MAP_TRANSLATIONS: dict[str, dict] = {
         "trend_banner_recede": "🌊 The sargassum mass is moving away ({dir} side) ↘",
         "trend_banner_approach": "🌊 A sargassum mass is approaching ({dir} side) ↗",
         "trend_banner_stable": "🌊 Sargassum stable around the island →",
-        "trend_closest": "nearest at {km} km",
+        "trend_closest": "nearest to the island at {km} km",
     },
 }
 

@@ -230,6 +230,7 @@ def _score_beach(
     beach_lon: float,
     radius_km: float,
     ratio: float,
+    positions_dense: list | None = None,
 ) -> dict:
     sample_count    = 0
     local_gauss_sum = 0.0
@@ -252,6 +253,23 @@ def _score_beach(
     est_count      = round(sample_count * ratio, 2)
     local_score    = round(local_gauss_sum  * ratio, 3)
     regional_score = round(reg_gauss_sum    * ratio, 3)
+    # closest_km : distance à la particule la plus proche. Le jeu UNIFORME
+    # (~500 pts sur tout le bassin) place rarement un point près d'une petite
+    # île → ce min est fortement surestimé (toutes les plages ressortaient à
+    # ~95 km simultanément). On mesure donc la distance sur le jeu DENSE
+    # régional quand il est fourni ; sinon on retombe sur l'uniforme.
+    # Les scores gaussiens, eux, restent sur l'uniforme : leur calibration par
+    # `ratio = n_active/n_sample` suppose un échantillonnage uniforme.
+    if positions_dense:
+        dmin = math.inf
+        for pt in positions_dense:
+            if len(pt) < 2:
+                continue
+            d = haversine_km(beach_lat, beach_lon, float(pt[1]), float(pt[0]))
+            if d < dmin:
+                dmin = d
+        if math.isfinite(dmin):
+            min_dist = dmin
     closest_km     = round(min_dist, 2) if math.isfinite(min_dist) else None
     catchment_area = math.pi * radius_km ** 2
     density_km2    = round(est_count / catchment_area, 6) if catchment_area > 0 else 0.0
@@ -308,6 +326,18 @@ def display_badge(presence: str, regional: str, trend_state: str) -> str:
     return presence
 
 
+def _shift_positions(positions: list, dlat_km: float, dlon_km: float,
+                     ref_lat: float) -> list:
+    """Applique la correction de biais (sim − obs) à un jeu de positions."""
+    deg_lat_per_km, deg_lon_per_km = _deg_per_km_at(ref_lat)
+    shift_lon = -dlon_km * deg_lon_per_km
+    shift_lat = -dlat_km * deg_lat_per_km
+    return [
+        [pt[0] + shift_lon, pt[1] + shift_lat]
+        for pt in positions if len(pt) >= 2
+    ]
+
+
 def _score_all_beaches(
     positions: list,
     n_active: int,
@@ -315,32 +345,37 @@ def _score_all_beaches(
     biases: dict,
     pred_month: int,
     day_offset: int,
+    positions_dense: list | None = None,
 ):
     """Score toutes les plages pour un snapshot donné, biais appliqué par île.
 
     Retourne [(beach_dict, island, score_dict), …]. Mutualisé entre le scoring
-    journalier (beach_risk_scores) et la timeline 3h (beach_timeline)."""
+    journalier (beach_risk_scores) et la timeline 3h (beach_timeline).
+
+    positions_dense : échantillon dense régional, utilisé UNIQUEMENT pour le
+    closest_km (voir _score_beach). Corrigé du même biais que le jeu uniforme."""
     ratio = n_active / n_sample if n_sample > 0 else 0.0
     corrected_cache: dict[str, list] = {}
+    dense_cache: dict[str, list] = {}
     out = []
     for beach in BEACHES:
         island = beach.get("island", "")
         bias = _bias_for(biases, island, pred_month, day_offset) if biases else None
         if bias and positions:
+            dlat_km, dlon_km = bias
             if island not in corrected_cache:
-                dlat_km, dlon_km = bias
-                deg_lat_per_km, deg_lon_per_km = _deg_per_km_at(beach["lat"])
-                shift_lon = -dlon_km * deg_lon_per_km
-                shift_lat = -dlat_km * deg_lat_per_km
-                corrected_cache[island] = [
-                    [pt[0] + shift_lon, pt[1] + shift_lat]
-                    for pt in positions if len(pt) >= 2
-                ]
+                corrected_cache[island] = _shift_positions(
+                    positions, dlat_km, dlon_km, beach["lat"])
+                if positions_dense:
+                    dense_cache[island] = _shift_positions(
+                        positions_dense, dlat_km, dlon_km, beach["lat"])
             positions_to_use = corrected_cache[island]
+            dense_to_use = dense_cache.get(island) if positions_dense else None
         else:
             positions_to_use = positions
+            dense_to_use = positions_dense
         s = _score_beach(positions_to_use, beach["lat"], beach["lon"],
-                         beach["radius_km"], ratio)
+                         beach["radius_km"], ratio, dense_to_use)
         out.append((beach, island, s))
     return out
 
@@ -439,7 +474,8 @@ def compute_beach_scores(db_path: Path = DB_PATH) -> int:
     # Scoring journalier : ne prendre que les snapshots de bord de journée
     # (hour_offset % 24 == 0). hour_offset IS NULL = anciennes sim avant la 3h.
     snaps = conn.execute(
-        f"""SELECT day_offset, positions_json, n_particles, active_fraction
+        f"""SELECT day_offset, positions_json, positions_viz_json,
+                   n_particles, active_fraction
             FROM drift_predictions
             WHERE simulated_at = ? AND day_offset IN ({placeholders})
               AND (hour_offset IS NULL OR hour_offset % 24 = 0)
@@ -470,6 +506,15 @@ def compute_beach_scores(db_path: Path = DB_PATH) -> int:
         except (json.JSONDecodeError, TypeError):
             positions = []
 
+        # Jeu dense régional : sert UNIQUEMENT au closest_km (l'uniforme est
+        # trop clairsemé près des petites îles). Retombe sur l'uniforme si absent.
+        try:
+            positions_dense = json.loads(snap["positions_viz_json"] or "[]")
+        except (json.JSONDecodeError, TypeError):
+            positions_dense = []
+        if not positions_dense:
+            positions_dense = positions
+
         n_sample = len(positions)
         ratio    = n_active / n_sample if n_sample > 0 else 0.0
 
@@ -478,29 +523,29 @@ def compute_beach_scores(db_path: Path = DB_PATH) -> int:
 
         # Cache des positions corrigées par île (1 calcul par île × snap)
         corrected_cache: dict[str, list] = {}
+        dense_cache: dict[str, list] = {}
 
         for beach in BEACHES:
             island = beach.get("island", "")
             bias = _bias_for(biases, island, pred_month, day) if biases else None
 
             if bias and positions:
+                dlat_km, dlon_km = bias
                 if island not in corrected_cache:
-                    dlat_km, dlon_km = bias
-                    deg_lat_per_km, deg_lon_per_km = _deg_per_km_at(beach["lat"])
                     # delta_*_km = sim - obs ; corriger = soustraire delta des positions
-                    shift_lon = -dlon_km * deg_lon_per_km
-                    shift_lat = -dlat_km * deg_lat_per_km
-                    corrected_cache[island] = [
-                        [pt[0] + shift_lon, pt[1] + shift_lat]
-                        for pt in positions if len(pt) >= 2
-                    ]
+                    corrected_cache[island] = _shift_positions(
+                        positions, dlat_km, dlon_km, beach["lat"])
+                    dense_cache[island] = _shift_positions(
+                        positions_dense, dlat_km, dlon_km, beach["lat"])
                 positions_to_use = corrected_cache[island]
+                dense_to_use = dense_cache[island]
                 bias_hits += 1
             else:
                 positions_to_use = positions
+                dense_to_use = positions_dense
 
             s = _score_beach(positions_to_use, beach["lat"], beach["lon"],
-                             beach["radius_km"], ratio)
+                             beach["radius_km"], ratio, dense_to_use)
             rows_to_insert.append((
                 computed_at, simulated_at,
                 island,
@@ -562,7 +607,7 @@ def compute_beach_timeline(db_path: Path = DB_PATH) -> int:
 
     snaps = conn.execute(
         """SELECT hour_offset, day_offset, sim_start, positions_json,
-                  n_particles, active_fraction
+                  positions_viz_json, n_particles, active_fraction
            FROM drift_predictions
            WHERE simulated_at = ? AND hour_offset IS NOT NULL
            ORDER BY hour_offset""",
@@ -592,6 +637,14 @@ def compute_beach_timeline(db_path: Path = DB_PATH) -> int:
             positions = []
         n_sample = len(positions)
 
+        # Jeu dense régional pour le closest_km (cf. compute_beach_scores).
+        try:
+            positions_dense = json.loads(snap["positions_viz_json"] or "[]")
+        except (json.JSONDecodeError, TypeError):
+            positions_dense = []
+        if not positions_dense:
+            positions_dense = positions
+
         pred_month = (sim_dt + timedelta(hours=hour)).month
 
         # valid_time = t0 (sim_start) + hour_offset
@@ -606,7 +659,8 @@ def compute_beach_timeline(db_path: Path = DB_PATH) -> int:
                 valid_time = None
 
         for beach, island, s in _score_all_beaches(
-            positions, n_active, n_sample, biases, pred_month, day
+            positions, n_active, n_sample, biases, pred_month, day,
+            positions_dense,
         ):
             rows_to_insert.append((
                 computed_at, simulated_at, island,

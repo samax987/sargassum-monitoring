@@ -42,6 +42,7 @@ import tempfile
 import time
 import traceback
 import warnings
+import zlib
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -218,6 +219,12 @@ def get_conn(path: Path = DB_PATH) -> sqlite3.Connection:
     # Migration idempotente : échantillon dense régional pour la carte
     if "positions_viz_json" not in cols:
         conn.execute("ALTER TABLE drift_predictions ADD COLUMN positions_viz_json TEXT")
+        conn.commit()
+    # Migration idempotente (2026-11-09) : jeu RÉGIONAL COMPLET pour le scoring
+    # des plages — toutes les particules de la boîte Antilles, actives ET
+    # échouées, JSON [[lon,lat,flag],…] compressé zlib (flag 1 = échouée).
+    if "positions_region_blob" not in cols:
+        conn.execute("ALTER TABLE drift_predictions ADD COLUMN positions_region_blob BLOB")
         conn.commit()
     conn.row_factory = sqlite3.Row
     return conn
@@ -938,6 +945,79 @@ def _fetch_afai_positions(stride: int = 3, threshold: float = 0.0001):
     return np.array(lons), np.array(lats), data_date
 
 
+def _distance_cote_km(lons: np.ndarray, lats: np.ndarray, pas_deg: float = 0.015) -> np.ndarray:
+    """
+    Distance (km) de chaque point à la terre la plus proche (trait de côte GSHHG).
+
+    Sert au masque côtier des points de départ. Pourquoi ce masque : mesuré le
+    2026-11-10 sur un an de composites AFAI 7 jours, le taux de « détection »
+    à moins de 10 km d'une côte reste entre 23 et 44 % des pixels lisibles
+    TOUTE L'ANNÉE (décembre-février comme mai-juillet), alors qu'au large il
+    suit la saison (0,7 % hors saison, 7 à 9 % en pleine saison). Près des
+    côtes le satellite voit donc surtout un faux signal lié à la terre, pas
+    des sargasses. Part de faux signal : > 90 % à moins de 10 km, ~75 % de
+    10 à 15 km, ~50 % de 15 à 20 km, ~10 % au-delà de 30 km.
+
+    Méthode : grille fine autour des points, masque terre, puis distance à la
+    cellule de terre la plus proche. Fiable jusqu'à ~50 km (marge de la grille).
+    """
+    from roaring_landmask import RoaringLandmask
+    from scipy.ndimage import distance_transform_edt
+
+    lons = np.asarray(lons, dtype="float64")
+    lats = np.asarray(lats, dtype="float64")
+    marge = 0.5   # degrés : la terre au-delà n'est pas vue (distance alors >= ~50 km)
+    glat = np.arange(lats.min() - marge, lats.max() + marge + pas_deg, pas_deg)
+    glon = np.arange(lons.min() - marge, lons.max() + marge + pas_deg, pas_deg)
+    grille_lon, grille_lat = np.meshgrid(glon, glat)
+    terre = RoaringLandmask.new().contains_many(
+        grille_lon.ravel(), grille_lat.ravel()
+    ).reshape(grille_lon.shape)
+    if not terre.any():
+        return np.full(len(lons), np.inf)
+    km_lat = pas_deg * 111.0
+    km_lon = km_lat * float(np.cos(np.radians(lats.mean())))
+    dist = distance_transform_edt(~terre, sampling=(km_lat, km_lon))
+    ii = np.rint((lats - glat[0]) / pas_deg).astype(int)
+    jj = np.rint((lons - glon[0]) / pas_deg).astype(int)
+    return dist[ii, jj]
+
+
+def _lire_masque_km() -> float:
+    """
+    Rayon du masque côtier (km) lu dans SARGA_SEED_COAST_KM. 0 = masque éteint.
+
+    Une valeur illisible (« 15km », « quinze ») lève ValueError : on préfère
+    une simulation en échec, signalée par logs/ECHEC_SIMULATION, à une
+    simulation qui repartirait en silence avec les points côtiers.
+    """
+    brut = (os.environ.get("SARGA_SEED_COAST_KM", "") or "0").strip()
+    try:
+        km = float(brut)
+    except ValueError:
+        raise ValueError(f"SARGA_SEED_COAST_KM illisible : {brut!r} (attendu un nombre de km)")
+    if km < 0 or not np.isfinite(km):
+        raise ValueError(f"SARGA_SEED_COAST_KM hors limites : {brut!r}")
+    return km
+
+
+def _masque_cotier(lons: np.ndarray, lats: np.ndarray, km: float) -> np.ndarray:
+    """
+    Points de départ à GARDER (tableau de booléens) : ceux à au moins `km` km
+    de toute côte. km <= 0 garde tout. Un point aux coordonnées invalides (NaN)
+    est écarté, il ne pourrait de toute façon pas être semé.
+    """
+    lons = np.asarray(lons, dtype="float64")
+    lats = np.asarray(lats, dtype="float64")
+    if km <= 0 or len(lons) == 0:
+        return np.ones(len(lons), dtype=bool)
+    valides = np.isfinite(lons) & np.isfinite(lats)
+    garder = np.zeros(len(lons), dtype=bool)
+    if valides.any():
+        garder[valides] = _distance_cote_km(lons[valides], lats[valides]) >= km
+    return garder
+
+
 def simulate_drift(conn: sqlite3.Connection) -> bool:
     """
     Simulation de dérive de sargasses sur 5 jours avec OpenDrift.
@@ -968,9 +1048,34 @@ def simulate_drift(conn: sqlite3.Connection) -> bool:
         raise EnvironmentError("COPERNICUS_USERNAME/PASSWORD requis pour la simulation")
 
     # ── 1. Positions de graine depuis NOAA AFAI ──────────────────────────────
-    print("    → Positions sargasses (ERDDAP AFAI stride=3)…")
-    lons_seed, lats_seed, afai_date = _fetch_afai_positions(stride=3)
+    # stride paramétrable pour pouvoir MESURER le lien entre nombre de
+    # particules et empreinte mémoire (défaut 3 = comportement historique).
+    _stride = int(os.environ.get("SARGA_AFAI_STRIDE", "3"))
+    print(f"    → Positions sargasses (ERDDAP AFAI stride={_stride})…")
+    lons_seed, lats_seed, afai_date = _fetch_afai_positions(stride=_stride)
     n_particles = len(lons_seed)
+
+    # ── 1bis. Masque côtier des points de départ ─────────────────────────────
+    # SARGA_SEED_COAST_KM=15 écarte les points à moins de 15 km d'une côte,
+    # qui sont surtout du faux signal (voir _distance_cote_km). À 0 ou absent,
+    # rien ne change.
+    # Depuis le 2026-11-11 : si le masque est demandé et échoue, la simulation
+    # ÉCHOUE (exception). Avant, elle repartait en silence avec tous les points
+    # côtiers, et les plages repassaient en « moyen » sans que rien ne le dise.
+    # Une simulation en échec garde la dernière dérive (masquée) en base et pose
+    # logs/ECHEC_SIMULATION, que le contrôle de santé quotidien signale.
+    _coast_km = _lire_masque_km()
+    n_avant_masque = n_particles
+    if _coast_km > 0 and n_particles > 0:
+        _loin = _masque_cotier(lons_seed, lats_seed, _coast_km)
+        print(f"    → Masque côtier {_coast_km:g} km : {int((~_loin).sum())} points écartés "
+              f"sur {n_particles}, {int(_loin.sum())} gardés")
+        lons_seed, lats_seed = lons_seed[_loin], lats_seed[_loin]
+        n_particles = len(lons_seed)
+        if n_particles == 0:
+            # La grille de repli sèmerait des particules fictives partout : on refuse.
+            raise RuntimeError(f"le masque côtier {_coast_km:g} km a écarté les "
+                               f"{n_avant_masque} points de départ, simulation annulée")
 
     if n_particles == 0:
         # Fallback : grille régulière sur la zone
@@ -1056,6 +1161,13 @@ def simulate_drift(conn: sqlite3.Connection) -> bool:
         od = OceanDrift(loglevel=50)      # silent
         od.add_reader(readers)
         od.set_config("general:use_auto_landmask", True)
+        # Échouage : une particule qui touche la côte est désactivée avec le
+        # statut « stranded » et sa position d'impact est conservée dans la
+        # sortie. C'est le comportement par défaut, rendu explicite ici car
+        # l'extraction ci-dessous en dépend : avant le 2026-11-09 ces
+        # particules étaient tout simplement perdues (NaN) avant le scoring,
+        # alors que ce sont précisément les arrivées sur les plages.
+        od.set_config("general:coastline_action", "stranding")
         # Windage : sargasses dérivent à ~1 % de la vitesse du vent (Putman et al. 2018)
         # Appliqué au seeding ; calibré ensuite via sarga_calibration_spatial.py.
         if wind_run:
@@ -1109,6 +1221,44 @@ def simulate_drift(conn: sqlite3.Connection) -> bool:
         _taxis   = sim_ds["lon"].dims.index("time")
         _lon_t   = np.moveaxis(_lon_all, _taxis, 0)   # (n_times, n_traj)
         _lat_t   = np.moveaxis(_lat_all, _taxis, 0)
+
+        # ── Particules ÉCHOUÉES : les garder, à leur point d'impact ──────────
+        # OpenDrift désactive une particule qui touche la côte : sa position est
+        # écrite au pas d'échouage (statut « stranded ») puis devient NaN. On
+        # propage (forward-fill) la dernière position et le dernier statut le
+        # long du temps : une particule échouée à h+30 reste comptée sur sa
+        # plage à j+2, j+3… (les sargasses restent plusieurs jours à terre).
+        # Les autres désactivations (sortie de grille, données manquantes)
+        # sont exclues : ni actives, ni échouées.
+        def _ffill_time(a: np.ndarray) -> np.ndarray:
+            out = a.astype(float).copy()
+            for _t in range(1, out.shape[0]):
+                _m = np.isnan(out[_t])
+                out[_t, _m] = out[_t - 1, _m]
+            return out
+
+        _lon_ff = _ffill_time(_lon_t)
+        _lat_ff = _ffill_time(_lat_t)
+        _stranded_t = np.zeros_like(_lon_t, dtype=bool)
+        if "status" in sim_ds.variables:
+            _st_raw = np.moveaxis(sim_ds["status"].values, _taxis, 0).astype(float)
+            _meanings = str(sim_ds["status"].attrs.get("flag_meanings", "")).split()
+            if "stranded" in _meanings:
+                _strand_num = _meanings.index("stranded")
+                _st_ff = _ffill_time(_st_raw)
+                _stranded_t = _st_ff == _strand_num
+        # Active = position valide ET pas (encore) échouée
+        _active_t = ~np.isnan(_lon_t) & ~_stranded_t
+        n_stranded_final = int(_stranded_t[-1].sum())
+        print(f"    → Échouages sur 5 jours : {n_stranded_final} particules "
+              f"({100.0 * n_stranded_final / max(n_particles, 1):.1f} %) — conservées pour le scoring")
+
+        # Boîte du jeu RÉGIONAL COMPLET (scoring plages). Doit déborder d'au
+        # moins ~150 km (3σ du score régional, σ = 50 km) autour des 5 îles :
+        # Martinique 14.4°N → 12.5 ; Saint-Martin 18.1°N → 20.5 ;
+        # côte est Martinique −60.8 → −58.5 ; ouest Guadeloupe −61.8 → −65.5.
+        SCORE_LON = (-65.5, -58.5)
+        SCORE_LAT = (12.5, 20.5)
         _in_box = (
             (_lon_t >= REG_LON[0]) & (_lon_t <= REG_LON[1]) &
             (_lat_t >= REG_LAT[0]) & (_lat_t <= REG_LAT[1])
@@ -1135,11 +1285,28 @@ def simulate_drift(conn: sqlite3.Connection) -> bool:
             day_offset  = hour_offset // 24
             if hour_offset % 24 == 0:
                 n_daily += 1
-            lo_t  = sim_ds["lon"].isel(time=t_idx).values
-            la_t  = sim_ds["lat"].isel(time=t_idx).values
-            active = ~np.isnan(lo_t)
+            lo_t  = _lon_t[t_idx]
+            la_t  = _lat_t[t_idx]
+            active = _active_t[t_idx]           # en mer (exclut les échouées)
             n_act  = int(active.sum())          # particules actives (tout le bassin)
             act_frac = n_act / n_particles if n_particles > 0 else 0.0
+
+            # (0) Jeu RÉGIONAL COMPLET (positions_region_blob) — scoring plages.
+            #     Toutes les particules de la boîte Antilles, actives (flag 0)
+            #     ou échouées à leur point d'impact (flag 1). Pas d'échantillon,
+            #     pas d'extrapolation : beaches.py score avec ratio = 1.
+            stranded = _stranded_t[t_idx]
+            lo_f, la_f = _lon_ff[t_idx], _lat_ff[t_idx]
+            keep = (active | stranded) & ~np.isnan(lo_f) & (
+                (lo_f >= SCORE_LON[0]) & (lo_f <= SCORE_LON[1]) &
+                (la_f >= SCORE_LAT[0]) & (la_f <= SCORE_LAT[1])
+            )
+            region = [
+                [round(float(lo), 3), round(float(la), 3), int(fl)]
+                for lo, la, fl in zip(lo_f[keep], la_f[keep], stranded[keep])
+            ]
+            n_region_stranded = int((stranded & keep).sum())
+            region_blob = zlib.compress(json.dumps(region, separators=(",", ":")).encode())
 
             # (1) Échantillon UNIFORME (positions_json) — représentatif, sert au
             #     scoring plages : ratio = n_active/n_sample suppose l'uniformité.
@@ -1180,21 +1347,33 @@ def simulate_drift(conn: sqlite3.Connection) -> bool:
                     "day": day_offset,
                     "hour": hour_offset,
                     "n_active": n_act,
+                    "n_stranded": int(stranded.sum()),
                     "n_stored": len(positions),
                     "n_viz": len(positions_viz),
+                    "n_region": len(region),
+                    "n_region_stranded": n_region_stranded,
                     "afai_date": afai_date,
                     "wind_run": wind_run,
                     "wind_drift_factor": 0.01 if wind_run else 0.0,
                     "stokes_drift": stokes_ok,
+                    # Masque côtier des points de départ (0 = aucun). Permet de
+                    # séparer les régimes dans forecast_archive et la vérification.
+                    # Grille de repli (ERDDAP sans aucun point) : régime INCONNU (None),
+                    # pour ne pas être prise pour l'ancien régime « sans masque » (0).
+                    "seed_coast_km": _coast_km if n_avant_masque > 0 else None,
+                    "n_seed_avant_masque": int(n_avant_masque),
+                    "grille_repli": n_avant_masque == 0,
                 }),
+                region_blob,
             ))
 
         conn.executemany(
             """INSERT INTO drift_predictions
                (simulated_at, sim_start, sim_end, n_particles, current_source,
                 day_offset, hour_offset, lon_min, lon_max, lat_min, lat_max,
-                active_fraction, positions_json, positions_viz_json, raw_metadata)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                active_fraction, positions_json, positions_viz_json, raw_metadata,
+                positions_region_blob)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             rows_drift,
         )
         # Purge : conserver les 90 dernières simulations (≈ 3 sem. à 4/j).
@@ -1331,12 +1510,18 @@ if __name__ == "__main__":
     elif "--simulate" in sys.argv:
         conn = get_conn()
         print("\n[OpenDrift – simulation dérive]")
+        code_retour = 0
         try:
             simulate_drift(conn)
         except Exception:
             traceback.print_exc()
+            # Code 1 : sargassum_run_linux.sh pose alors logs/ECHEC_SIMULATION.
+            # Avant le 2026-11-11 l'exception était avalée et le script
+            # sortait en succès, donc aucun échec Python n'était jamais signalé.
+            code_retour = 1
         finally:
             conn.close()
+        sys.exit(code_retour)
     elif "--schedule" in sys.argv:
         if not HAS_SCHEDULE:
             print("Installez schedule : pip install schedule")

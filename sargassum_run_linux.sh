@@ -6,6 +6,13 @@ DIR=/opt/sargassum
 # Active Stokes drift CMEMS Wave (gain ~10% précision dernier km)
 # Nécessite swap (>=2 GB) sur le VPS, sinon OOM-killer.
 export ENABLE_STOKES_DRIFT=1
+# Masque côtier des points de départ : écarte ceux à moins de 15 km d une côte,
+# qui sont surtout du faux signal satellite (mesuré le 2026-11-10, voir CLAUDE.md).
+# Pour revenir en arrière : commenter la ligne suivante.
+export SARGA_SEED_COAST_KM=15
+# cache matplotlib dans un dossier accessible a webapps : sans lui, matplotlib
+# recree son cache a chaque run et perd quelques secondes en avertissements.
+export MPLCONFIGDIR=/opt/sargassum/.cache/matplotlib
 
 mkdir -p "$DIR/logs"
 cd "$DIR"
@@ -18,8 +25,17 @@ echo "[1/4] Collecte des données…"
 "$PYTHON" "$DIR/sargassum_collector.py"
 
 echo "[2/4] Simulation de dérive OpenDrift…"
-"$PYTHON" "$DIR/sargassum_collector.py" --simulate || \
+if "$PYTHON" "$DIR/sargassum_collector.py" --simulate; then
+    # succès : on efface la trace, sinon le check santé signalerait un échec périmé
+    rm -f "$DIR/logs/ECHEC_SIMULATION"
+else
     echo "  ⚠️  Simulation OpenDrift échouée — données de dérive non mises à jour"
+    # Trace lisible par le check santé quotidien : un échec ici ne doit plus être silencieux.
+    date -u '+%Y-%m-%dT%H:%M:%SZ' > "$DIR/logs/ECHEC_SIMULATION"
+    # Journal jamais effacé : ECHEC_SIMULATION disparaît au premier succès suivant,
+    # donc un échec isolé passait inaperçu. sargassum_healthcheck.py lit ce journal.
+    date -u '+%Y-%m-%dT%H:%M:%SZ' >> "$DIR/logs/echecs_simulation.log"
+fi
 
 echo "[3/4] Calcul des scores de plage…"
 "$PYTHON" "$DIR/beaches.py"

@@ -14,6 +14,8 @@ Verifications
   2. Dernier scoring   : beach_risk_scores.computed_at < 8h
   3. Derniere drift sim : drift_predictions.simulated_at < 24h
   4. Dashboard Streamlit : HTTP GET localhost:8501/_stcore/health
+  5. Echec de simulation : une ligne recente dans logs/echecs_simulation.log
+     (ecrit par sargassum_run_linux.sh a chaque simulation ratee, jamais efface)
 
 Usage
 -----
@@ -50,6 +52,14 @@ THRESHOLDS = {
     'last_news':      48,   # scraper tourne 1x/jour
     'anfc_max_age':   24,   # alerte si anfc indispo et fallback nrt utilise depuis 24h+
 }
+
+# Journal des simulations ratees (une date ISO par ligne, ajout seul)
+ECHECS_SIM_LOG = Path(__file__).parent / "logs" / "echecs_simulation.log"
+# Un echec compte tant qu'il a moins de 6 h : c'est l'intervalle entre deux
+# passages. Un echec isole donne donc UNE alerte, puis « systeme retabli » au
+# passage reussi suivant. Avant le 2026-11-14 il fallait ~4 echecs de suite
+# (derive de plus de 24 h) pour qu'une alerte parte.
+ECHEC_SIM_FENETRE_H = 6
 
 # URL du dashboard a verifier
 DASHBOARD_URL = "http://localhost:8501/_stcore/health"
@@ -178,6 +188,24 @@ def check_last_drift(conn: sqlite3.Connection) -> tuple[bool, str]:
     return True, f"OK ({age_h:.1f}h)"
 
 
+def check_sim_failure() -> tuple[bool, str]:
+    """Signale une simulation ratee dans les ECHEC_SIM_FENETRE_H dernieres heures."""
+    if not ECHECS_SIM_LOG.exists():
+        return True, "OK (aucun echec enregistre)"
+    recents = []
+    for ligne in ECHECS_SIM_LOG.read_text().splitlines()[-50:]:
+        try:
+            age_h = _hours_since(ligne.strip())
+        except ValueError:
+            continue   # ligne illisible : on l'ignore, on ne plante pas le watchdog
+        if 0 <= age_h < ECHEC_SIM_FENETRE_H:
+            recents.append(age_h)
+    if recents:
+        return False, (f"Simulation ratee il y a {min(recents):.1f}h "
+                       f"(voir logs/cron.log ; les scores viennent de la derive precedente)")
+    return True, "OK (aucun echec recent)"
+
+
 def check_dashboard() -> tuple[bool, str]:
     """Verifie que le dashboard Streamlit repond."""
     try:
@@ -194,6 +222,7 @@ CHECKS = [
     ('anfc',      check_anfc_health,  'Source courants anfc (qualite)'),
     ('scoring',   check_last_scoring, 'Scoring plages (beaches.py)'),
     ('drift',     check_last_drift,   'Simulation OpenDrift (5j)'),
+    ('sim_echec', check_sim_failure,  'Echec de simulation (dernier passage)'),
     ('dashboard', check_dashboard,    'Dashboard Streamlit :8501'),
 ]
 
@@ -288,7 +317,7 @@ def run_checks(verbose: bool = True) -> tuple[list[dict], list[dict]]:
 
     for key, func, label in CHECKS:
         # Les checks DB prennent conn, les autres rien
-        if func == check_dashboard:
+        if func in (check_dashboard, check_sim_failure):
             ok, msg = func()
         else:
             ok, msg = func(conn)

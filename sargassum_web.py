@@ -253,7 +253,11 @@ def api_status():
                ROUND(s.regional_score, 1) AS regional_score,
                ROUND(s.local_score, 2) AS local_score,
                ROUND(s.closest_km, 1) AS closest_km,
-               s.computed_at
+               s.computed_at,
+               -- Fenêtre d'exposition (2026-11) : part de la masse régionale qui fait
+               -- FACE à la plage par la mer (0..1) et direction d'ouverture de la plage
+               ROUND(s.exposed_frac, 2) AS exposed_frac,
+               json_extract(bc.exposure_json, '$.facing_deg') AS facing_deg
         FROM beach_risk_scores s
         LEFT JOIN beaches_config bc
             ON bc.island = s.island AND bc.name = s.beach_name AND bc.active = 1
@@ -274,6 +278,9 @@ def api_status():
                 'lat': row['beach_lat'],
                 'lon': row['beach_lon'],
                 'computed_at': row['computed_at'],
+                # Direction d'ouverture de la plage sur la mer (° géographiques,
+                # 0 = N), None si la fenêtre d'exposition n'est pas calculée
+                'facing_deg': row['facing_deg'],
                 'forecast': [],
             }
         presence = presence_label(row['local_score'])
@@ -287,6 +294,8 @@ def api_status():
             'regional_score': row['regional_score'],
             'closest_km': row['closest_km'],
             'local_score': row['local_score'],
+            # Part (0..1) de la masse régionale qui fait face à la plage par la mer
+            'exposed_frac': row['exposed_frac'],
             # Présence brute (sur la plage)
             'presence': presence,
             # Badge public FINAL = présence + filet de sécurité (watch si masse qui approche)
@@ -314,6 +323,10 @@ def api_status():
         beach['worst_3d_badge'] = worst_badge
         beach['worst_3d_badge_color'] = risk_to_color(worst_badge)
         beach['worst_3d_badge_label'] = risk_to_fr(worst_badge)
+        # Part maximale de la masse au large faisant face à la plage sur 3 jours
+        # (accolée au tag « masse au large » : 0 % = elle approche de l'autre côté)
+        fracs = [f['exposed_frac'] for f in beach['forecast'][:3] if f['exposed_frac'] is not None]
+        beach['exposed_3d'] = max(fracs) if fracs else None
 
     conn.close()
     return jsonify({

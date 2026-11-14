@@ -158,6 +158,147 @@ class TestScoreBeach(unittest.TestCase):
         self.assertAlmostEqual(result["density_km2"], expected_density, places=4)
 
 
+class TestStrandedFlag(unittest.TestCase):
+    """Jeu régional complet : points [lon, lat, flag] (flag 1 = échouée)."""
+
+    def test_three_field_points_accepted(self):
+        """Un point à 3 champs est scoré comme un point à 2 champs."""
+        pts2 = [[-60.86, 14.39], [-60.87, 14.40]]
+        pts3 = [[-60.86, 14.39, 1], [-60.87, 14.40, 0]]
+        r2 = beaches._score_beach(pts2, 14.39, -60.86, 3.0, 1.0)
+        r3 = beaches._score_beach(pts3, 14.39, -60.86, 3.0, 1.0)
+        self.assertEqual(r2["local_score"], r3["local_score"])
+        self.assertEqual(r2["regional_score"], r3["regional_score"])
+
+    def test_n_stranded_counts_only_in_radius(self):
+        """n_stranded = échouées DANS radius_km uniquement."""
+        pts = [[-60.86, 14.39, 1],        # sur la plage, échouée
+               [-60.861, 14.391, 0],      # sur la plage, active
+               [-62.83, 17.90, 1]]        # échouée mais à 400 km
+        r = beaches._score_beach(pts, 14.39, -60.86, 3.0, 1.0)
+        self.assertEqual(r["n_stranded"], 1)
+        self.assertEqual(r["sample_count"], 2)
+
+    def test_no_flag_means_zero_stranded(self):
+        r = beaches._score_beach([[-60.86, 14.39]], 14.39, -60.86, 3.0, 1.0)
+        self.assertEqual(r["n_stranded"], 0)
+
+    def test_shift_keeps_flag(self):
+        """La correction de biais ne doit pas perdre le flag échouage."""
+        out = beaches._shift_positions([[-60.86, 14.39, 1], [-60.0, 14.0]], 5.0, -5.0, 14.39)
+        self.assertEqual(len(out[0]), 3)
+        self.assertEqual(out[0][2], 1)
+        self.assertEqual(len(out[1]), 2)
+
+    def test_decode_region_roundtrip_and_garbage(self):
+        import zlib as _zlib, json as _json
+        region = [[-60.86, 14.39, 1]]
+        blob = _zlib.compress(_json.dumps(region).encode())
+        self.assertEqual(beaches._decode_region(blob), region)
+        self.assertIsNone(beaches._decode_region(None))
+        self.assertIsNone(beaches._decode_region(b"pas du zlib"))
+
+
+class TestExposureWindow(unittest.TestCase):
+    """Fenêtre d'exposition : seules les particules visibles par la mer comptent
+    dans le score local. Fenêtre synthétique : ouverte au nord (330°–30°) sur
+    40 km, fermée partout ailleurs."""
+
+    def _window(self):
+        open_km = [0.0] * 72
+        for b in list(range(330, 360, 5)) + list(range(0, 35, 5)):
+            open_km[b // 5] = 40.0
+        return {"step_deg": 5, "max_km": 40.0, "open_km": open_km,
+                "snap_lat": 17.92, "snap_lon": -62.85}
+
+    def test_bearing(self):
+        self.assertAlmostEqual(beaches._bearing_deg(17.92, -62.85, 18.02, -62.85), 0.0, delta=0.5)   # nord
+        self.assertAlmostEqual(beaches._bearing_deg(17.92, -62.85, 17.92, -62.75), 90.0, delta=0.5)  # est
+        self.assertAlmostEqual(beaches._bearing_deg(17.92, -62.85, 17.82, -62.85), 180.0, delta=0.5) # sud
+
+    def test_visible_by_sea(self):
+        w = self._window()
+        self.assertTrue(beaches._visible_by_sea(w, 0.0, 10.0))      # nord ouvert
+        self.assertTrue(beaches._visible_by_sea(w, 350.0, 39.0))    # NNO ouvert
+        self.assertFalse(beaches._visible_by_sea(w, 180.0, 1.0))    # sud fermé, même tout près
+        self.assertTrue(beaches._visible_by_sea(w, 0.0, 200.0))     # au-delà du plafond : ouvert
+        self.assertTrue(beaches._visible_by_sea(None, 180.0, 1.0))  # sans fenêtre : pas de filtre
+        self.assertTrue(beaches._visible_by_sea({"open_km": []}, 180.0, 1.0))
+
+    def test_tolerance_one_sector(self):
+        """Une particule à 35° (secteur fermé) passe grâce au voisin ouvert à 30°."""
+        w = self._window()
+        self.assertTrue(beaches._visible_by_sea(w, 35.0, 10.0))
+        self.assertFalse(beaches._visible_by_sea(w, 45.0, 10.0))
+
+    def test_local_score_filters_hidden_particles(self):
+        """Trois particules à 1 km : en mer au nord (visible), en mer au sud
+        (cachée par la terre), échouée au sud (comptée : pas de test pour les
+        échouées, posées à terre par pas de 3 h)."""
+        w = self._window()
+        lat, lon = 17.92, -62.85
+        north = [lon, lat + 0.009]           # ~1 km au nord, en mer
+        south = [lon, lat - 0.009]           # ~1 km au sud, en mer
+        south_stranded = [lon + 0.002, lat - 0.009, 1]
+        pts = [north, south, south_stranded]
+        raw = beaches._score_beach(pts, lat, lon, 2.0, 1.0)
+        win = beaches._score_beach(pts, lat, lon, 2.0, 1.0, None, w)
+        self.assertEqual(raw["sample_count"], 3)
+        self.assertEqual(win["sample_count"], 2)
+        self.assertEqual(win["sample_hidden"], 1)
+        self.assertEqual(win["n_stranded"], 1)
+        self.assertAlmostEqual(win["local_score_raw"], raw["local_score"], places=3)
+        self.assertLess(win["local_score"], win["local_score_raw"])
+        # le régional n'est PAS filtré…
+        self.assertAlmostEqual(win["regional_score"], raw["regional_score"], places=3)
+        # …mais regional_exposed exclut la particule en mer cachée (2 sur 3 visibles)
+        self.assertLess(win["regional_exposed"], win["regional_score"])
+        self.assertAlmostEqual(win["exposed_frac"], 2 / 3, places=2)
+        self.assertIsNone(raw["exposed_frac"])
+
+    def test_exposed_frac_discriminates_coasts(self):
+        """Masse à 15 km au NORD : une plage ouverte au nord voit ~100 % de la
+        masse régionale lui faire face, une plage ouverte au SUD ~0 %."""
+        north_window = self._window()
+        south_window = dict(north_window)
+        south_window["open_km"] = north_window["open_km"][36:] + north_window["open_km"][:36]  # +180°
+        lat, lon = 17.92, -62.85
+        mass = [[lon + dx, lat + 0.135] for dx in (-0.02, -0.01, 0.0, 0.01, 0.02)]  # ~15 km N
+        n = beaches._score_beach(mass, lat, lon, 2.0, 1.0, None, north_window)
+        s = beaches._score_beach(mass, lat, lon, 2.0, 1.0, None, south_window)
+        self.assertAlmostEqual(n["regional_score"], s["regional_score"], places=3)   # même masse
+        self.assertGreater(n["exposed_frac"], 0.99)
+        self.assertLess(s["exposed_frac"], 0.01)
+
+    def test_far_stranded_is_tested(self):
+        """Une échouée à 20 km (côte d'une autre île) n'est pas exemptée du test."""
+        w = self._window()
+        lat, lon = 17.92, -62.85
+        far_south_stranded = [lon, lat - 0.18, 1]      # ~20 km au sud, fermé
+        s = beaches._score_beach([far_south_stranded], lat, lon, 2.0, 1.0, None, w)
+        self.assertEqual(s["regional_exposed"], 0.0)
+        self.assertGreater(s["regional_score"], 0.0)
+
+    def test_eye_point_used_when_present(self):
+        """Avec eye_lat/eye_lon, les azimuts sont mesurés depuis l'œil au large."""
+        w = self._window()
+        w["eye_lat"], w["eye_lon"] = 17.925, -62.85   # 550 m au nord de la plage
+        lat, lon = 17.92, -62.85
+        # particule à l'est de l'œil (90°, fermé) mais au NE de la plage (ouvert à 30°…)
+        pt = [lon + 0.005, 17.925]
+        self.assertFalse(beaches._visible_by_sea(w, beaches._bearing_deg(17.925, -62.85, 17.925, lon + 0.005), 0.5))
+        s = beaches._score_beach([pt], lat, lon, 2.0, 1.0, None, w)
+        self.assertEqual(s["sample_hidden"], 1)
+
+    def test_no_window_is_identity(self):
+        pts = [[-62.85, 17.93], [-62.85, 17.91, 1]]
+        a = beaches._score_beach(pts, 17.92, -62.85, 2.0, 1.0)
+        b = beaches._score_beach(pts, 17.92, -62.85, 2.0, 1.0, None, None)
+        self.assertEqual(a["local_score"], b["local_score"])
+        self.assertEqual(a["local_score"], a["local_score_raw"])
+        self.assertEqual(b["n_stranded"], 1)
+
+
 class TestComputeBeachScoresIntegration(unittest.TestCase):
     """Tests d'integration avec une DB SQLite en memoire."""
 
@@ -255,6 +396,77 @@ class TestComputeBeachScoresIntegration(unittest.TestCase):
         self.assertEqual(n, 0)
         if empty_db.exists():
             os.unlink(empty_db)
+
+    def test_archive_filled_and_not_purged(self):
+        """Chaque run alimente forecast_archive (jamais purgé) avec target_date."""
+        beaches.compute_beach_scores(self.db_path)
+        beaches.compute_beach_scores(self.db_path)
+        conn = sqlite3.connect(self.db_path)
+        n_arch = conn.execute("SELECT COUNT(*) FROM forecast_archive").fetchone()[0]
+        row = conn.execute(
+            "SELECT target_date, day_offset, presence, scoring_mode FROM forecast_archive "
+            "WHERE day_offset = 2 LIMIT 1").fetchone()
+        conn.close()
+        # 2 runs → 2× les lignes : rien n'est purgé (même si computed_at identique)
+        self.assertEqual(n_arch, 2 * len(beaches.BEACHES) * len(beaches.DAY_OFFSETS))
+        # simulated_at = 2026-03-31 → j+2 vise le 2 avril
+        self.assertEqual(row[0], "2026-04-02")
+        self.assertIn(row[2], {"none", "low", "medium", "high"})
+        self.assertEqual(row[3], "sample")   # pas de jeu régional dans cette fixture
+
+    def test_archive_note_le_masque_cotier(self):
+        """Le masque côtier noté par le collecteur est recopié dans forecast_archive (2026-11-11)."""
+        conn = sqlite3.connect(self.db_path)
+        conn.execute("""UPDATE drift_predictions
+                        SET raw_metadata = '{"day": 0, "seed_coast_km": 15.0, "n_seed_avant_masque": 6225}'""")
+        conn.commit()
+        conn.close()
+        beaches.compute_beach_scores(self.db_path)
+        conn = sqlite3.connect(self.db_path)
+        vals = conn.execute("SELECT DISTINCT seed_coast_km FROM forecast_archive").fetchall()
+        conn.close()
+        self.assertEqual(vals, [(15.0,)])
+
+    def test_archive_masque_inconnu_reste_vide(self):
+        """Sans trace du masque (ancienne simulation), la colonne reste NULL : inconnu, pas 0."""
+        beaches.compute_beach_scores(self.db_path)
+        conn = sqlite3.connect(self.db_path)
+        vals = conn.execute("SELECT DISTINCT seed_coast_km FROM forecast_archive").fetchall()
+        conn.close()
+        self.assertEqual(vals, [(None,)])
+
+    def test_region_blob_scoring_mode(self):
+        """Avec positions_region_blob, le scoring se fait sur le jeu complet (ratio 1)
+        et compte les particules échouées dans le rayon de la plage."""
+        import zlib as _zlib, json as _json
+        conn = sqlite3.connect(self.db_path)
+        conn.execute("ALTER TABLE drift_predictions ADD COLUMN positions_region_blob BLOB")
+        # 3 particules sur Les Salines (Martinique) : 2 échouées, 1 active ;
+        # 1 particule active loin (Saint-Barth).
+        salines = next(b for b in beaches.BEACHES if b["name"] == "Les_Salines")
+        region = [
+            [salines["lon"], salines["lat"], 1],
+            [salines["lon"] + 0.001, salines["lat"], 1],
+            [salines["lon"] - 0.001, salines["lat"], 0],
+            [-62.83, 17.90, 0],
+        ]
+        blob = _zlib.compress(_json.dumps(region).encode())
+        conn.execute("UPDATE drift_predictions SET positions_region_blob = ?", (blob,))
+        conn.commit()
+        conn.close()
+
+        beaches.compute_beach_scores(self.db_path)
+        conn = sqlite3.connect(self.db_path)
+        r = conn.execute(
+            "SELECT n_stranded, sample_count, est_count, n_sample FROM beach_risk_scores "
+            "WHERE beach_name = 'Les_Salines' AND day_offset = 0").fetchone()
+        mode = conn.execute("SELECT DISTINCT scoring_mode FROM forecast_archive").fetchall()
+        conn.close()
+        self.assertEqual(r[0], 2)          # 2 échouées dans le rayon
+        self.assertEqual(r[1], 3)          # 3 particules dans le rayon
+        self.assertEqual(r[2], 3.0)        # ratio 1 : pas d'extrapolation
+        self.assertEqual(r[3], 4)          # n_sample = taille du jeu complet
+        self.assertEqual(mode, [("region",)])
 
     def test_purge_keeps_60_computed_at(self):
         """La purge ne garde que les 60 derniers computed_at."""

@@ -30,6 +30,7 @@ import json
 import math
 import sqlite3
 import sys
+import zlib
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -51,6 +52,12 @@ LOCAL_THRESHOLDS = {"low": 0.5, "medium": 3.0, "high": 10.0}
 APPLY_BIAS_CORRECTION = True
 MIN_BIAS_NOBS         = 3
 MAX_BIAS_KM           = 60.0  # garde-fou : ignore biais > 60 km (vraisemblablement aberrants)
+
+# Fenêtre d'exposition : une particule ÉCHOUÉE à moins de cette distance de la
+# plage compte sans test de visibilité (OpenDrift la pose jusqu'à 2-3 km à
+# l'intérieur des terres au pas de 3 h). Au-delà, c'est la côte d'une autre
+# île : on teste comme pour une particule en mer.
+STRANDED_EXEMPT_KM    = 3.0
 
 
 # ── Plages — Antilles françaises ───────────────────────────────────────────────
@@ -129,22 +136,38 @@ BEACHES = [
 # ── Override BEACHES depuis la DB (table beaches_config) ──────────────────────
 # Si la table existe et n'est pas vide, on charge les plages depuis la DB
 # au lieu de la liste hardcodee ci-dessus. La liste reste en fallback.
-try:
+def _load_beaches_from_db() -> list | None:
+    """Plages actives depuis beaches_config, avec leur fenêtre d'exposition
+    (`exposure` : dict décodé de exposure_json, None si pas encore calculée).
+    None si la table est absente/vide → l'appelant garde la liste hardcodée."""
     import beaches_db as _beaches_db
-    if not _beaches_db.is_table_empty():
-        _db_beaches = _beaches_db.list_all(only_active=True)
-        if _db_beaches:
-            # Garde le format attendu par le code (island, name, lat, lon, radius_km)
-            BEACHES = [
-                {
-                    'island':    b['island'],
-                    'name':      b['name'],
-                    'lat':       b['lat'],
-                    'lon':       b['lon'],
-                    'radius_km': b['radius_km'],
-                }
-                for b in _db_beaches
-            ]
+    if _beaches_db.is_table_empty():
+        return None
+    _db_beaches = _beaches_db.list_all(only_active=True)
+    if not _db_beaches:
+        return None
+    out = []
+    for b in _db_beaches:
+        exposure = None
+        if b.get('exposure_json'):
+            try:
+                exposure = json.loads(b['exposure_json'])
+            except (json.JSONDecodeError, TypeError):
+                exposure = None
+        # Garde le format attendu par le code (island, name, lat, lon, radius_km)
+        out.append({
+            'island':    b['island'],
+            'name':      b['name'],
+            'lat':       b['lat'],
+            'lon':       b['lon'],
+            'radius_km': b['radius_km'],
+            'exposure':  exposure,
+        })
+    return out
+
+
+try:
+    BEACHES = _load_beaches_from_db() or BEACHES
 except Exception as _e:
     # En cas d'erreur (table absente, etc.), garde la liste hardcodee
     import sys
@@ -231,28 +254,78 @@ def _score_beach(
     radius_km: float,
     ratio: float,
     positions_dense: list | None = None,
+    exposure: dict | None = None,
 ) -> dict:
+    """Scores d'une plage pour un jeu de positions.
+
+    exposure : fenêtre d'exposition (sarga_exposure.py). Si fournie, le score
+    LOCAL et est_count ne comptent, parmi les particules EN MER, que celles
+    « visibles par la mer » depuis la plage (pas de terre entre elles et la
+    plage) ; le score brut sans fenêtre est conservé dans local_score_raw.
+    Les particules ÉCHOUÉES (flag pt[2] == 1) à moins de STRANDED_EXEMPT_KM ne
+    sont pas testées : OpenDrift les pose au premier pas de 3 h où elles sont à
+    terre, donc jusqu'à 2-3 km à l'intérieur de l'île — un test de visibilité
+    les cacherait toujours. Au-delà (côte d'une autre île), elles sont testées.
+    Le score RÉGIONAL (approche à 50 km, alertes) n'est PAS filtré ; on calcule
+    en plus regional_exposed = la part de cette masse régionale qui fait FACE à
+    la plage par la mer, et exposed_frac = regional_exposed / regional_score.
+    C'est ce qui distingue enfin deux plages d'une même île."""
     sample_count    = 0
-    local_gauss_sum = 0.0
+    sample_hidden   = 0      # en mer, dans radius_km, mais cachées par la terre
+    n_stranded      = 0      # particules ÉCHOUÉES (flag pt[2] == 1) dans radius_km
+    local_gauss_sum = 0.0    # pondéré par la fenêtre
+    local_raw_sum   = 0.0    # sans fenêtre
     reg_gauss_sum   = 0.0
+    reg_exposed_sum = 0.0    # régional restreint aux particules visibles par la mer
     min_dist        = math.inf
+
+    # Origine des rayons de la fenêtre : l'« œil » 300 m au large, sinon le point
+    # de côte, sinon le point catalogue.
+    if exposure and exposure.get("eye_lat") is not None:
+        eye_lat, eye_lon = exposure["eye_lat"], exposure["eye_lon"]
+    elif exposure and exposure.get("snap_lat") is not None:
+        eye_lat, eye_lon = exposure["snap_lat"], exposure["snap_lon"]
+    else:
+        eye_lat, eye_lon = beach_lat, beach_lon
 
     for pt in positions:
         if len(pt) < 2:
             continue
-        d = haversine_km(beach_lat, beach_lon, float(pt[1]), float(pt[0]))
+        plon, plat = float(pt[0]), float(pt[1])
+        stranded = len(pt) >= 3 and bool(pt[2])
+        d = haversine_km(beach_lat, beach_lon, plat, plon)
 
         if d < min_dist:
             min_dist = d
+
+        g_local = math.exp(-0.5 * (d / radius_km) ** 2)
+        g_reg   = math.exp(-0.5 * (d / REGIONAL_SIGMA) ** 2)
+        local_raw_sum += g_local
+        reg_gauss_sum += g_reg
+
+        visible = True
+        if exposure and g_reg > 1e-4 and not (stranded and d <= STRANDED_EXEMPT_KM):
+            d_eye = haversine_km(eye_lat, eye_lon, plat, plon)
+            visible = _visible_by_sea(exposure, _bearing_deg(eye_lat, eye_lon, plat, plon), d_eye)
+        if visible:
+            local_gauss_sum += g_local
+            reg_exposed_sum += g_reg
+
         if d <= radius_km:
-            sample_count += 1
+            if visible:
+                sample_count += 1
+                if stranded:
+                    n_stranded += 1
+            else:
+                sample_hidden += 1
 
-        local_gauss_sum += math.exp(-0.5 * (d / radius_km)    ** 2)
-        reg_gauss_sum   += math.exp(-0.5 * (d / REGIONAL_SIGMA) ** 2)
-
-    est_count      = round(sample_count * ratio, 2)
-    local_score    = round(local_gauss_sum  * ratio, 3)
-    regional_score = round(reg_gauss_sum    * ratio, 3)
+    est_count        = round(sample_count * ratio, 2)
+    local_score      = round(local_gauss_sum * ratio, 3)
+    local_score_raw  = round(local_raw_sum   * ratio, 3)
+    regional_score   = round(reg_gauss_sum   * ratio, 3)
+    regional_exposed = round(reg_exposed_sum * ratio, 3)
+    exposed_frac     = (round(reg_exposed_sum / reg_gauss_sum, 3)
+                        if exposure and reg_gauss_sum > 1e-9 else None)
     # closest_km : distance à la particule la plus proche. Le jeu UNIFORME
     # (~500 pts sur tout le bassin) place rarement un point près d'une petite
     # île → ce min est fortement surestimé (toutes les plages ressortaient à
@@ -275,13 +348,60 @@ def _score_beach(
     density_km2    = round(est_count / catchment_area, 6) if catchment_area > 0 else 0.0
 
     return {
-        "sample_count":   sample_count,
-        "est_count":      est_count,
-        "local_score":    local_score,
-        "regional_score": regional_score,
-        "closest_km":     closest_km,
-        "density_km2":    density_km2,
+        "sample_count":    sample_count,
+        "sample_hidden":   sample_hidden,
+        "n_stranded":      n_stranded,
+        "est_count":       est_count,
+        "local_score":     local_score,
+        "local_score_raw": local_score_raw,
+        "regional_score":  regional_score,
+        "regional_exposed": regional_exposed,
+        "exposed_frac":    exposed_frac,
+        "closest_km":      closest_km,
+        "density_km2":     density_km2,
     }
+
+
+# ── Fenêtre d'exposition (géométrie du dernier km) ────────────────────────────
+# Copies locales minimales de sarga_exposure (pour ne pas en dépendre à l'import).
+
+def _bearing_deg(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Azimut géographique de 1 vers 2 : 0 = nord, 90 = est."""
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    dlon = math.radians(lon2 - lon1)
+    x = math.sin(dlon) * math.cos(phi2)
+    y = math.cos(phi1) * math.sin(phi2) - math.sin(phi1) * math.cos(phi2) * math.cos(dlon)
+    return (math.degrees(math.atan2(x, y)) + 360.0) % 360.0
+
+
+def _visible_by_sea(exposure: dict | None, bearing: float, dist_km: float) -> bool:
+    """True si une particule à (bearing, dist_km) atteint la plage par la mer.
+
+    Lit la fenêtre calculée par sarga_exposure.py (eau libre par secteur de 5°,
+    plafond max_km). Tolérance ±1 secteur. Sans fenêtre → True (pas de filtre)."""
+    if not exposure or not exposure.get("open_km"):
+        return True
+    open_km = exposure["open_km"]
+    step = exposure.get("step_deg", 5)
+    n = len(open_km)
+    i = int(round(bearing / step)) % n
+    reach = max(open_km[(i - 1) % n], open_km[i], open_km[(i + 1) % n])
+    cap = exposure.get("max_km", 40.0)
+    return reach >= min(dist_km, cap - 1e-6)
+
+
+def _decode_region(blob) -> list | None:
+    """Décode le jeu régional complet stocké par le collecteur
+    (positions_region_blob : JSON [[lon,lat,flag],…] compressé zlib).
+
+    Retourne None si la colonne est absente/vide (anciennes simulations) :
+    l'appelant retombe alors sur l'échantillon uniforme extrapolé."""
+    if not blob:
+        return None
+    try:
+        return json.loads(zlib.decompress(blob).decode())
+    except (zlib.error, json.JSONDecodeError, UnicodeDecodeError, TypeError):
+        return None
 
 
 def risk_label(regional_score: float) -> str:
@@ -332,8 +452,9 @@ def _shift_positions(positions: list, dlat_km: float, dlon_km: float,
     deg_lat_per_km, deg_lon_per_km = _deg_per_km_at(ref_lat)
     shift_lon = -dlon_km * deg_lon_per_km
     shift_lat = -dlat_km * deg_lat_per_km
+    # pt[2:] conserve le flag échouage éventuel (jeu régional complet)
     return [
-        [pt[0] + shift_lon, pt[1] + shift_lat]
+        [pt[0] + shift_lon, pt[1] + shift_lat, *pt[2:]]
         for pt in positions if len(pt) >= 2
     ]
 
@@ -346,6 +467,7 @@ def _score_all_beaches(
     pred_month: int,
     day_offset: int,
     positions_dense: list | None = None,
+    ratio_override: float | None = None,
 ):
     """Score toutes les plages pour un snapshot donné, biais appliqué par île.
 
@@ -353,8 +475,13 @@ def _score_all_beaches(
     journalier (beach_risk_scores) et la timeline 3h (beach_timeline).
 
     positions_dense : échantillon dense régional, utilisé UNIQUEMENT pour le
-    closest_km (voir _score_beach). Corrigé du même biais que le jeu uniforme."""
-    ratio = n_active / n_sample if n_sample > 0 else 0.0
+    closest_km (voir _score_beach). Corrigé du même biais que le jeu uniforme.
+    ratio_override  : 1.0 quand `positions` est le jeu régional COMPLET (toutes
+    les particules, pas d'extrapolation) ; None = ancien mode échantillon."""
+    if ratio_override is not None:
+        ratio = ratio_override
+    else:
+        ratio = n_active / n_sample if n_sample > 0 else 0.0
     corrected_cache: dict[str, list] = {}
     dense_cache: dict[str, list] = {}
     out = []
@@ -375,7 +502,8 @@ def _score_all_beaches(
             positions_to_use = positions
             dense_to_use = positions_dense
         s = _score_beach(positions_to_use, beach["lat"], beach["lon"],
-                         beach["radius_km"], ratio, dense_to_use)
+                         beach["radius_km"], ratio, dense_to_use,
+                         beach.get("exposure"))
         out.append((beach, island, s))
     return out
 
@@ -412,7 +540,49 @@ _NEW_COLUMNS = [
     ("regional_score", "REAL"),
     ("closest_km",     "REAL"),
     ("density_km2",    "REAL"),
+    ("n_stranded",     "INTEGER"),   # particules échouées dans radius_km (2026-11)
+    ("local_score_raw", "REAL"),     # score local SANS fenêtre d'exposition (2026-11)
+    ("sample_hidden",  "INTEGER"),   # particules dans le rayon mais cachées par la terre
+    ("regional_exposed", "REAL"),    # part du régional qui fait face à la plage par la mer
+    ("exposed_frac",   "REAL"),      # regional_exposed / regional_score (0..1)
 ]
+
+# Colonnes ajoutées à forecast_archive après sa création (migration douce)
+_ARCHIVE_NEW_COLUMNS = [
+    ("local_score_raw", "REAL"),
+    ("presence_raw",    "TEXT"),     # badge qu'on aurait affiché SANS la fenêtre
+    ("regional_exposed", "REAL"),
+    ("exposed_frac",    "REAL"),
+    # Masque côtier des points de départ de la simulation utilisée (km, 0 = aucun,
+    # NULL = inconnu). Sert à ne pas mélanger les régimes dans la vérification.
+    ("seed_coast_km",   "REAL"),
+]
+
+# Archive des prévisions, JAMAIS purgée : c'est la matière première de la
+# vérification (sarga_verification.py). Sans elle, on ne pouvait pas comparer
+# ce qu'on avait prévu à ce que les bénévoles ont observé (beach_risk_scores
+# est purgé à 60 runs, soit ~2 semaines). ~1 400 lignes/jour, léger.
+_ARCHIVE_SCHEMA = """
+CREATE TABLE IF NOT EXISTS forecast_archive (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    computed_at    TEXT    NOT NULL,   -- quand la prévision a été calculée
+    simulated_at   TEXT    NOT NULL,
+    island         TEXT,
+    beach_name     TEXT    NOT NULL,
+    day_offset     INTEGER NOT NULL,   -- échéance (j+0 … j+5)
+    target_date    TEXT    NOT NULL,   -- jour visé (YYYY-MM-DD, UTC)
+    est_count      REAL,
+    local_score    REAL,
+    regional_score REAL,
+    closest_km     REAL,
+    n_stranded     INTEGER,
+    risk_level     TEXT,               -- régional (approche)
+    presence       TEXT,               -- local (sur la plage)
+    scoring_mode   TEXT                -- 'region' (jeu complet) | 'sample' (ancien)
+);
+CREATE INDEX IF NOT EXISTS idx_archive_lookup
+    ON forecast_archive (beach_name, target_date, day_offset);
+"""
 
 
 _TIMELINE_SCHEMA = """
@@ -446,16 +616,33 @@ def _get_conn(db_path: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path)
     conn.executescript(_SCHEMA)
     conn.executescript(_TIMELINE_SCHEMA)
+    conn.executescript(_ARCHIVE_SCHEMA)
     existing = {row[1] for row in conn.execute("PRAGMA table_info(beach_risk_scores)")}
     for col, typedef in _NEW_COLUMNS:
         if col not in existing:
             conn.execute(f"ALTER TABLE beach_risk_scores ADD COLUMN {col} {typedef}")
+    existing_tl = {row[1] for row in conn.execute("PRAGMA table_info(beach_timeline)")}
+    if "n_stranded" not in existing_tl:
+        conn.execute("ALTER TABLE beach_timeline ADD COLUMN n_stranded INTEGER")
+    existing_ar = {row[1] for row in conn.execute("PRAGMA table_info(forecast_archive)")}
+    for col, typedef in _ARCHIVE_NEW_COLUMNS:
+        if col not in existing_ar:
+            conn.execute(f"ALTER TABLE forecast_archive ADD COLUMN {col} {typedef}")
     conn.commit()
     conn.row_factory = sqlite3.Row
     return conn
 
 
 # ── Calcul des scores ─────────────────────────────────────────────────────────
+
+def _seed_coast_km(raw_metadata: str | None) -> float | None:
+    """Masque côtier noté par le collecteur dans raw_metadata (None si absent ou illisible)."""
+    try:
+        v = json.loads(raw_metadata or "{}").get("seed_coast_km")
+        return float(v) if v is not None else None
+    except (ValueError, TypeError, AttributeError):
+        return None
+
 
 def compute_beach_scores(db_path: Path = DB_PATH) -> int:
     conn = _get_conn(db_path)
@@ -473,9 +660,13 @@ def compute_beach_scores(db_path: Path = DB_PATH) -> int:
     placeholders = ",".join("?" * len(DAY_OFFSETS))
     # Scoring journalier : ne prendre que les snapshots de bord de journée
     # (hour_offset % 24 == 0). hour_offset IS NULL = anciennes sim avant la 3h.
+    has_region = "positions_region_blob" in {
+        row[1] for row in conn.execute("PRAGMA table_info(drift_predictions)")
+    }
+    region_col = "positions_region_blob" if has_region else "NULL AS positions_region_blob"
     snaps = conn.execute(
         f"""SELECT day_offset, positions_json, positions_viz_json,
-                   n_particles, active_fraction
+                   n_particles, active_fraction, {region_col}, raw_metadata
             FROM drift_predictions
             WHERE simulated_at = ? AND day_offset IN ({placeholders})
               AND (hour_offset IS NULL OR hour_offset % 24 = 0)
@@ -490,10 +681,16 @@ def compute_beach_scores(db_path: Path = DB_PATH) -> int:
 
     computed_at    = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     rows_to_insert = []
+    archive_rows   = []
+    seed_coast_km  = _seed_coast_km(snaps[0]["raw_metadata"])
+    if seed_coast_km is not None:
+        print(f"  🧹 Masque côtier des points de départ : "
+              + (f"{seed_coast_km:g} km" if seed_coast_km > 0 else "aucun"))
 
     biases = _load_latest_biases(conn) if APPLY_BIAS_CORRECTION else {}
     sim_dt = datetime.fromisoformat(simulated_at.replace("Z", "+00:00"))
     bias_hits = 0  # combien de (snap × beach) ont reçu la correction
+    modes_used: set[str] = set()
 
     for snap in snaps:
         day         = snap["day_offset"]
@@ -501,22 +698,37 @@ def compute_beach_scores(db_path: Path = DB_PATH) -> int:
         act_frac    = snap["active_fraction"] or 0.0
         n_active    = int(round(n_particles * act_frac))
 
-        try:
-            positions = json.loads(snap["positions_json"] or "[]")
-        except (json.JSONDecodeError, TypeError):
-            positions = []
+        # Jeu RÉGIONAL COMPLET (depuis 2026-11-09) : toutes les particules de la
+        # boîte Antilles, actives et échouées → scoring exact, ratio = 1.
+        # Avant : 500 pts uniformes sur TOUT le bassin ×12 → presque jamais un
+        # point à < 2 km d'une plage, local_score structurellement ~0.
+        region = _decode_region(snap["positions_region_blob"])
+        if region is not None:
+            positions       = region
+            positions_dense = None          # le jeu complet EST le plus dense
+            n_sample        = len(region)
+            ratio           = 1.0
+            scoring_mode    = "region"
+        else:
+            try:
+                positions = json.loads(snap["positions_json"] or "[]")
+            except (json.JSONDecodeError, TypeError):
+                positions = []
 
-        # Jeu dense régional : sert UNIQUEMENT au closest_km (l'uniforme est
-        # trop clairsemé près des petites îles). Retombe sur l'uniforme si absent.
-        try:
-            positions_dense = json.loads(snap["positions_viz_json"] or "[]")
-        except (json.JSONDecodeError, TypeError):
-            positions_dense = []
-        if not positions_dense:
-            positions_dense = positions
+            # Jeu dense régional : sert UNIQUEMENT au closest_km (l'uniforme est
+            # trop clairsemé près des petites îles). Retombe sur l'uniforme si absent.
+            try:
+                positions_dense = json.loads(snap["positions_viz_json"] or "[]")
+            except (json.JSONDecodeError, TypeError):
+                positions_dense = []
+            if not positions_dense:
+                positions_dense = positions
 
-        n_sample = len(positions)
-        ratio    = n_active / n_sample if n_sample > 0 else 0.0
+            n_sample     = len(positions)
+            ratio        = n_active / n_sample if n_sample > 0 else 0.0
+            scoring_mode = "sample"
+        modes_used.add(scoring_mode)
+        target_date = (sim_dt + timedelta(days=day)).strftime("%Y-%m-%d")
 
         # Mois de la date prédite (utilisé pour lookup du biais)
         pred_month = (sim_dt + timedelta(days=day)).month
@@ -535,17 +747,20 @@ def compute_beach_scores(db_path: Path = DB_PATH) -> int:
                     # delta_*_km = sim - obs ; corriger = soustraire delta des positions
                     corrected_cache[island] = _shift_positions(
                         positions, dlat_km, dlon_km, beach["lat"])
-                    dense_cache[island] = _shift_positions(
-                        positions_dense, dlat_km, dlon_km, beach["lat"])
+                    if positions_dense:
+                        dense_cache[island] = _shift_positions(
+                            positions_dense, dlat_km, dlon_km, beach["lat"])
                 positions_to_use = corrected_cache[island]
-                dense_to_use = dense_cache[island]
+                dense_to_use = dense_cache.get(island) if positions_dense else None
                 bias_hits += 1
             else:
                 positions_to_use = positions
                 dense_to_use = positions_dense
 
             s = _score_beach(positions_to_use, beach["lat"], beach["lon"],
-                             beach["radius_km"], ratio, dense_to_use)
+                             beach["radius_km"], ratio, dense_to_use,
+                             beach.get("exposure"))
+            level = risk_label(s["regional_score"])
             rows_to_insert.append((
                 computed_at, simulated_at,
                 island,
@@ -554,13 +769,25 @@ def compute_beach_scores(db_path: Path = DB_PATH) -> int:
                 s["sample_count"], n_sample, n_active, n_particles,
                 s["est_count"], s["local_score"], s["regional_score"],
                 s["closest_km"], s["density_km2"],
-                risk_label(s["regional_score"]),
+                level, s["n_stranded"], s["local_score_raw"], s["sample_hidden"],
+                s["regional_exposed"], s["exposed_frac"],
+            ))
+            archive_rows.append((
+                computed_at, simulated_at, island, beach["name"], day, target_date,
+                s["est_count"], s["local_score"], s["regional_score"],
+                s["closest_km"], s["n_stranded"],
+                level, presence_label(s["local_score"]), scoring_mode,
+                s["local_score_raw"], presence_label(s["local_score_raw"]),
+                s["regional_exposed"], s["exposed_frac"], seed_coast_km,
             ))
 
     if APPLY_BIAS_CORRECTION:
         total = len(rows_to_insert)
         print(f"  🎯 Correction biais appliquée à {bias_hits}/{total} scores "
               f"(seuil n_obs ≥ {MIN_BIAS_NOBS}, |Δ| ≤ {MAX_BIAS_KM} km)")
+    print(f"  📐 Mode de scoring : {', '.join(sorted(modes_used))}"
+          + ("  (jeu régional complet, échouées incluses)" if "region" in modes_used else
+             "  (échantillon uniforme extrapolé — ancienne simulation)"))
 
     conn.executemany(
         """INSERT INTO beach_risk_scores
@@ -568,9 +795,20 @@ def compute_beach_scores(db_path: Path = DB_PATH) -> int:
             beach_name, beach_lat, beach_lon,
             radius_km, day_offset, sample_count, n_sample, n_active,
             n_particles, est_count, local_score, regional_score,
-            closest_km, density_km2, risk_level)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            closest_km, density_km2, risk_level, n_stranded, local_score_raw, sample_hidden,
+            regional_exposed, exposed_frac)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         rows_to_insert,
+    )
+    # Archive permanente (pas de purge) pour la vérification a posteriori
+    conn.executemany(
+        """INSERT INTO forecast_archive
+           (computed_at, simulated_at, island, beach_name, day_offset, target_date,
+            est_count, local_score, regional_score, closest_km, n_stranded,
+            risk_level, presence, scoring_mode, local_score_raw, presence_raw,
+            regional_exposed, exposed_frac, seed_coast_km)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        archive_rows,
     )
     conn.commit()
 
@@ -605,9 +843,13 @@ def compute_beach_timeline(db_path: Path = DB_PATH) -> int:
         return 0
     simulated_at = row["max_sim"]
 
+    has_region = "positions_region_blob" in {
+        row[1] for row in conn.execute("PRAGMA table_info(drift_predictions)")
+    }
+    region_col = "positions_region_blob" if has_region else "NULL AS positions_region_blob"
     snaps = conn.execute(
-        """SELECT hour_offset, day_offset, sim_start, positions_json,
-                  positions_viz_json, n_particles, active_fraction
+        f"""SELECT hour_offset, day_offset, sim_start, positions_json,
+                  positions_viz_json, n_particles, active_fraction, {region_col}
            FROM drift_predictions
            WHERE simulated_at = ? AND hour_offset IS NOT NULL
            ORDER BY hour_offset""",
@@ -645,6 +887,14 @@ def compute_beach_timeline(db_path: Path = DB_PATH) -> int:
         if not positions_dense:
             positions_dense = positions
 
+        # Jeu régional COMPLET si disponible (cf. compute_beach_scores) :
+        # il remplace l'échantillon ET le jeu dense, ratio = 1.
+        ratio_override = None
+        region = _decode_region(snap["positions_region_blob"]) if has_region else None
+        if region is not None:
+            positions, positions_dense = region, None
+            n_sample, ratio_override = len(region), 1.0
+
         pred_month = (sim_dt + timedelta(hours=hour)).month
 
         # valid_time = t0 (sim_start) + hour_offset
@@ -660,22 +910,22 @@ def compute_beach_timeline(db_path: Path = DB_PATH) -> int:
 
         for beach, island, s in _score_all_beaches(
             positions, n_active, n_sample, biases, pred_month, day,
-            positions_dense,
+            positions_dense, ratio_override,
         ):
             rows_to_insert.append((
                 computed_at, simulated_at, island,
                 beach["name"], beach["lat"], beach["lon"], beach["radius_km"],
                 hour, day, valid_time,
                 s["est_count"], s["local_score"], s["regional_score"],
-                s["closest_km"], risk_label(s["regional_score"]),
+                s["closest_km"], risk_label(s["regional_score"]), s["n_stranded"],
             ))
 
     conn.executemany(
         """INSERT INTO beach_timeline
            (computed_at, simulated_at, island, beach_name, beach_lat, beach_lon,
             radius_km, hour_offset, day_offset, valid_time,
-            est_count, local_score, regional_score, closest_km, risk_level)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            est_count, local_score, regional_score, closest_km, risk_level, n_stranded)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         rows_to_insert,
     )
     conn.commit()
@@ -712,12 +962,17 @@ def print_report(db_path: Path = DB_PATH) -> None:
     scores = conn.execute(
         """SELECT island, beach_name, day_offset, sample_count, est_count,
                   local_score, regional_score, closest_km,
-                  density_km2, risk_level, radius_km, n_active, n_particles, n_sample
+                  density_km2, risk_level, radius_km, n_active, n_particles, n_sample,
+                  n_stranded, exposed_frac
            FROM beach_risk_scores
            WHERE computed_at = ?
            ORDER BY island, beach_name, day_offset""",
         (last,),
     ).fetchall()
+    mode_row = conn.execute(
+        "SELECT scoring_mode FROM forecast_archive WHERE computed_at = ? LIMIT 1", (last,)
+    ).fetchone()
+    scoring_mode = mode_row["scoring_mode"] if mode_row else "sample"
     conn.close()
 
     if not scores:
@@ -742,8 +997,8 @@ def print_report(db_path: Path = DB_PATH) -> None:
         print(f"  🏖️  Risque sargasses — {island}  (calculé {last})")
         print(f"{'═'*72}")
 
-        header = f"{'Plage':<22}" + "".join(f"  {'j+'+str(d):<18}" for d in days)
-        sub    = f"{'':22}" + "".join(f"  {'rég / loc / prox':18}" for _ in days)
+        header = f"{'Plage':<22}" + "".join(f"  {'j+'+str(d):<26}" for d in days)
+        sub    = f"{'':22}" + "".join(f"  {'rég face / loc / prox ⚓':26}" for _ in days)
         print(header)
         print(sub)
         print("─" * len(header))
@@ -755,19 +1010,31 @@ def print_report(db_path: Path = DB_PATH) -> None:
                 if s:
                     icon  = ICONS.get(s["risk_level"], "?")
                     prox  = f"{s['closest_km']:.0f}km" if s["closest_km"] is not None else "—"
-                    line += (f"  {icon} {s['regional_score']:5.1f}"
+                    # face = part de la masse régionale qui fait face à la plage par la mer
+                    ef    = s["exposed_frac"]
+                    face  = f"{int(round(ef * 100)):3d}%" if ef is not None else "   —"
+                    # ⚓ = particules échouées dans le rayon de la plage
+                    ns    = s["n_stranded"] or 0
+                    anc   = f"⚓{ns}" if ns else ""
+                    line += (f"  {icon} {s['regional_score']:5.1f}{face}"
                              f" /{s['local_score']:5.1f}"
-                             f" /{prox:>5}")
+                             f" /{prox:>5} {anc:<3}")
                 else:
-                    line += "  " + "—" * 18
+                    line += "  " + "—" * 26
             print(line)
 
     print()
+    # Depuis 2026-11-09 le scoring se fait sur le jeu régional COMPLET
+    # (n_sample = nb de particules Antilles, actives + échouées, ratio 1).
+    # Les anciennes simulations gardent l'échantillon uniforme extrapolé.
+    if scoring_mode == "region":
+        jeu = f"jeu régional complet {r0['n_sample']} pts Antilles (échouées incluses, ×1)"
+    else:
+        jeu = f"échantillon {r0['n_sample']} pts (×{ratio:.1f})"
     print(f"  Simulation  : {r0['n_particles']} particules | "
-          f"{r0['n_active']} actives | "
-          f"échantillon {r0['n_sample']} pts (×{ratio:.1f})")
-    print(f"  Colonnes    : risque | regional_score (σ=50km) | "
-          f"local_score (σ=radius) | closest_km")
+          f"{r0['n_active']} actives en mer | {jeu}")
+    print(f"  Colonnes    : risque | regional_score (σ=50km) + % de cette masse FACE à la plage par la mer | "
+          f"local_score (σ=radius, visibles par la mer) | closest_km | ⚓ échouées dans le rayon")
     print()
     print(f"  Seuils risk_level (regional_score extrapolé) :")
     print(f"    🟢 < {RISK_THRESHOLDS['low']}   "
@@ -790,9 +1057,20 @@ if __name__ == "__main__":
         print_report(db)
         sys.exit(0)
 
+    # Fenêtres d'exposition manquantes (plage ajoutée via /admin) : on les
+    # calcule ici, APRÈS la simulation (RAM libre), puis on recharge le catalogue.
+    try:
+        import sarga_exposure as _expo
+        if _expo.ensure_exposures(db) > 0:
+            BEACHES = _load_beaches_from_db() or BEACHES
+    except Exception as _e:   # noqa: BLE001 — jamais bloquant pour le scoring
+        print(f"  [warn] fenêtres d'exposition : {_e}", file=sys.stderr)
+
     n_islands = len({b["island"] for b in BEACHES})
     n_beaches = len(BEACHES)
-    print(f"\n🏖️  Calcul des scores de risque — {n_islands} îles, {n_beaches} plages")
+    n_expo    = sum(1 for b in BEACHES if b.get("exposure"))
+    print(f"\n🏖️  Calcul des scores de risque — {n_islands} îles, {n_beaches} plages"
+          f" ({n_expo} avec fenêtre d'exposition)")
     n = compute_beach_scores(db)
     if n > 0:
         print(f"  ✅ {n} scores insérés dans beach_risk_scores")

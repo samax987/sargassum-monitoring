@@ -650,11 +650,14 @@
             attribution: 'Esri, Maxar', maxZoom: 19,
         }).addTo(map);
 
-        // Labels villes/routes (CartoDB plus propre que Stamen)
-        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}.png', {
-            attribution: '© CartoDB',
+        // Labels villes/lieux. CartoDB (dark_only_labels) exige une clé API depuis
+        // fin 2026 et imprimait « API KEY REQUIRED » sur toute la carte (constaté
+        // le 2026-11-09) → calque de référence Esri, gratuit, même serveur que le
+        // fond satellite.
+        L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}', {
+            attribution: 'Esri',
             maxZoom: 19,
-            opacity: 0.85,
+            opacity: 0.9,
         }).addTo(map);
 
         beachLayer = L.layerGroup().addTo(map);
@@ -749,17 +752,38 @@
             const offshoreHtml = offshore
                 ? `<span style="color:#fbbf24">⚠️ ${I18N.offshore_note}</span><br>`
                 : '';
+            // 🧭 Fenêtre d'exposition : quelle part de la masse au large fait face à
+            // CETTE plage par la mer (distingue deux plages d'une même île). Affiché
+            // seulement s'il y a une masse (risque régional ≥ faible) et une fenêtre.
+            let facingHtml = '';
+            // Condition sur le RÉGIONAL (il y a une masse au large), pas sur le badge
+            // « sur la plage » : c'est justement quand rien n'est encore arrivé que
+            // savoir si la masse fait face à cette plage est utile.
+            if (dayData.exposed_frac != null && dayData.risk_level && dayData.risk_level !== 'none') {
+                const pct = Math.round(dayData.exposed_frac * 100);
+                const pctColor = pct >= 50 ? '#fbbf24' : (pct >= 20 ? '#e2e8f0' : '#94a3b8');
+                const opens = (beach.facing_deg != null && I18N.facing_opens)
+                    ? ` <span style="opacity:.7">(${I18N.facing_opens.replace('{dir}', degToCompass(beach.facing_deg))})</span>`
+                    : '';
+                facingHtml = `<br>🧭 ${I18N.facing_popup} : <strong style="color:${pctColor}">${pct} %</strong>${opens}`;
+            }
             const marker = L.marker([beach.lat, beach.lon], { icon });
             // Largeur de popup bornée à l'écran (sinon débordement sur mobile)
             const popupMaxW = Math.min(280, (window.innerWidth || 360) - 40);
             marker.bindPopup(`
                 <strong>${beach.name.replace(/_/g, ' ')}</strong><br>
                 ${I18N.popup_risk} J+${day} : <span style="color:${color};font-weight:600">${I18N.risk[level]}</span><br>
-                ${offshoreHtml}${I18N.popup_closest} : <strong>~${Math.round(dayData.closest_km)} km</strong>${trendTxt}${obsBlock}
+                ${offshoreHtml}${I18N.popup_closest} : <strong>~${Math.round(dayData.closest_km)} km</strong>${trendTxt}${facingHtml}${obsBlock}
                 <br><a href="/contribuer/signaler?beach=${encodeURIComponent(beach.name)}"
                        style="display:inline-block;margin-top:6px;color:#60a5fa;font-weight:600;text-decoration:none">
                     📷 ${I18N.popup_report}</a>
-            `, { maxWidth: popupMaxW });
+            `, {
+                maxWidth: popupMaxW,
+                // Marge pour que la bulle ne passe pas sous les boutons +/− (en haut
+                // à gauche) quand la plage est près du bord : constaté sur mobile.
+                autoPanPaddingTopLeft: L.point(64, 12),
+                autoPanPaddingBottomRight: L.point(12, 12),
+            });
             return marker;
         }
 
@@ -931,8 +955,11 @@
 
                 // Tag « masse au large » : régional ≥ moyen, plage pas touchée et pas en « Surveiller »
                 const offshore = rank[beach.worst_3d] >= 2 && rank[beach.worst_3d_badge] <= 1;
+                // + part de cette masse qui fait face à la plage (🧭) : « 45 % en face »
+                const facingTxt = (offshore && beach.exposed_3d != null && I18N.facing_short)
+                    ? ` · 🧭 ${Math.round(beach.exposed_3d * 100)} % ${I18N.facing_short}` : '';
                 const offshoreTag = offshore
-                    ? `<span class="offshore-tag">⚠️ ${I18N.offshore_short}</span>` : '';
+                    ? `<span class="offshore-tag">⚠️ ${I18N.offshore_short}${facingTxt}</span>` : '';
 
                 card.innerHTML = `
                     <div class="beach-header">

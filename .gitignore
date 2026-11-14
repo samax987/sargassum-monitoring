@@ -43,3 +43,6 @@ logs/
 
 # Photos des signalements contributeurs (donnees, pas du code)
 contrib_photos/
+
+# Cache matplotlib du pipeline
+.cache/

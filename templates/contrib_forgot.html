@@ -1,0 +1,29 @@
+{% extends "contrib_base.html" %}
+{% block title %}{{ t.forgot_title }}{% endblock %}
+{% block content %}
+  <h1>{{ t.forgot_title }}</h1>
+
+  {% if done %}
+    <div class="alert ok">{{ t.forgot_done }}</div>
+    <div class="btn-row">
+      <a class="btn ghost" href="{{ url_for('contrib.login') }}">{{ t.login_title }}</a>
+    </div>
+  {% else %}
+    {% if error %}<div class="alert error">{{ error }}</div>{% endif %}
+    <p class="lead">{{ t.forgot_lead }}</p>
+    <div class="card">
+      <form method="post" action="{{ url_for('contrib.forgot_password') }}">
+        <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+
+        <label for="identifier">{{ t.forgot_id_label }}</label>
+        <input type="text" id="identifier" name="identifier" required
+               autocapitalize="none" spellcheck="false" maxlength="60">
+
+        <div class="btn-row">
+          <button class="btn block" type="submit">{{ t.forgot_submit }}</button>
+        </div>
+      </form>
+    </div>
+    <p class="lead"><a href="{{ url_for('contrib.login') }}">← {{ t.login_title }}</a></p>
+  {% endif %}
+{% endblock %}

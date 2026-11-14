@@ -4,31 +4,14 @@
   <h1>{{ t.home_title }}</h1>
   <p class="lead">{{ t.home_lead }}</p>
 
-  {% if contributor %}
-    <div class="card">
-      <h2>{{ t.home_connected_title }}</h2>
-      <p>{{ t.home_hi }} {{ contributor.display_name }} — {{ t.home_shared_pre }}
-        <strong>{{ contributor.obs_count }}</strong> {{ t.home_shared_post }}</p>
-      <div class="btn-row">
-        <a class="btn" href="{{ url_for('contrib.observer') }}">{{ t.btn_report_beach }}</a>
-        <a class="btn ghost" href="{{ url_for('contrib.my_observations') }}">{{ t.btn_see_my }}</a>
-      </div>
-    </div>
-  {% else %}
-    <div class="card">
-      <h2>{{ t.home_how_title }}</h2>
-      <ol>
-        <li>{{ t.home_step1 }}</li>
-        <li>{{ t.home_step2 }}</li>
-        <li>{{ t.home_step3 }}</li>
-        <li>{{ t.home_step4 }}</li>
-      </ol>
-      <div class="btn-row">
-        <a class="btn" href="{{ url_for('contrib.register') }}">{{ t.btn_create }}</a>
-        <a class="btn ghost" href="{{ url_for('contrib.login') }}">{{ t.btn_have }}</a>
-      </div>
-    </div>
-  {% endif %}
+  <!-- Chemin par défaut : signalement direct, sans compte (zéro friction) -->
+  <div class="card" style="text-align:center; border-color:var(--accent-2)">
+    <a class="btn block" href="{{ url_for('contrib.report_anon') }}"
+       style="font-size:1.15rem; padding:16px">{{ t.cta_report_now }}</a>
+    <p class="lead" style="margin:10px 0 0">{{ t.cta_report_sub }}</p>
+  </div>
 
-  <p class="lead" style="font-size:.9rem">{{ t.home_privacy }}</p>
+  {# Comptes contributeurs retirés de l'UI (juin 2026) : le signalement direct
+     sans compte est le seul chemin. Les routes /inscription, /connexion, etc.
+     existent toujours dans le code mais ne sont plus exposées. #}
 {% endblock %}

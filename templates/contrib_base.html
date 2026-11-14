@@ -106,18 +106,8 @@
     <div class="spacer"></div>
     <nav>
       <a href="{{ url_for('index') }}">{{ t.nav_map }}</a>
-      {% if contributor is defined and contributor %}
-        <span class="who">👋 {{ contributor.display_name }}</span>
-        <a href="{{ url_for('contrib.observer') }}">{{ t.nav_report }}</a>
-        <a href="{{ url_for('contrib.my_observations') }}">{{ t.nav_my }}</a>
-        <form class="inline-form" method="post" action="{{ url_for('contrib.logout') }}">
-          <input type="hidden" name="_csrf" value="{{ csrf_token }}">
-          <button class="btn ghost" type="submit">{{ t.nav_logout }}</button>
-        </form>
-      {% else %}
-        <a href="{{ url_for('contrib.login') }}">{{ t.nav_login }}</a>
-        <a href="{{ url_for('contrib.register') }}">{{ t.nav_register }}</a>
-      {% endif %}
+      {# Comptes retirés de l'UI (juin 2026) : seul le signalement direct reste. #}
+      <a href="{{ url_for('contrib.report_anon') }}">{{ t.nav_report }}</a>
       <span class="langsw">
         <a href="{{ request.path }}?lang=fr"{% if lang == 'fr' %} class="cur"{% endif %}>FR</a>
         ·

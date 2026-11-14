@@ -18,7 +18,7 @@
         <thead>
           <tr>
             <th>{{ t.col_date }}</th><th>{{ t.col_beach }}</th><th>{{ t.col_sarg }}</th>
-            <th>{{ t.col_cov }}</th><th>{{ t.col_photo }}</th><th>{{ t.col_status }}</th>
+            <th>{{ t.col_loc }}</th><th>{{ t.col_cov }}</th><th>{{ t.col_photo }}</th><th>{{ t.col_status }}</th>
           </tr>
         </thead>
         <tbody>
@@ -27,6 +27,7 @@
               <td>{{ o.observed_at.replace('T', ' ')[:16] }}</td>
               <td>{{ o.beach_name.replace('_', ' ') }}</td>
               <td>{{ t.risk_map.get(o.observed_risk, o.observed_risk) }}</td>
+              <td>{{ t.location_map.get(o.sarg_location, '—') if o.sarg_location else '—' }}</td>
               <td>{{ o.coverage_pct if o.coverage_pct is not none else '—' }}{% if o.coverage_pct is not none %}&nbsp;%{% endif %}</td>
               <td>
                 {% if o.photos %}

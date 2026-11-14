@@ -44,6 +44,12 @@ OBS_PENDING = "pending"         # soumis, en attente de modération
 OBS_APPROVED = "approved"       # validé et promu dans beach_observations
 OBS_REJECTED = "rejected"       # rejeté
 
+# Compte « sentinelle » des signalements ANONYMES (sans compte). La colonne
+# contributor_observations.contributor_id est NOT NULL : tout signalement direct
+# y est rattaché. Ce compte ne peut pas se connecter (mot de passe aléatoire
+# jamais communiqué) et il est masqué des écrans d'administration des comptes.
+ANON_USERNAME = "_anonyme_"
+
 
 def _utcnow() -> str:
     """Horodatage ISO sans microsecondes, cohérent avec le reste de la base."""
@@ -124,11 +130,85 @@ def init_db(db_path: Path | str = DB_PATH) -> None:
             )
         except sqlite3.OperationalError:
             pass
+        # Localisation des sargasses (juin 2026) : 'water' (dans l'eau),
+        # 'beach' (échouées sur le sable) ou 'both'. Complète observed_risk
+        # (la quantité) : un baigneur veut savoir OÙ sont les algues, pas
+        # seulement combien. NULL si aucune sargasse signalée.
+        try:
+            conn.execute(
+                "ALTER TABLE contributor_observations ADD COLUMN sarg_location TEXT"
+            )
+        except sqlite3.OperationalError:
+            pass
         # Backfill : les anciens signalements à photo unique → liste JSON.
         conn.execute(
             "UPDATE contributor_observations SET photos_json = '[\"' || photo_path || '\"]' "
             "WHERE photos_json IS NULL AND photo_path IS NOT NULL"
         )
+        # Migrations additives sur les comptes (try/except : SQLite n'a pas
+        # ADD COLUMN IF NOT EXISTS — convention du projet).
+        #   email                : facultatif, pour un futur reset auto par e-mail
+        #   must_change_password : force le choix d'un mdp perso après reset admin
+        #   pwd_changed_at       : horodatage du dernier changement de mdp ; sert
+        #                          à invalider les autres sessions (cf. routes)
+        for ddl in (
+            "ALTER TABLE contributors ADD COLUMN email TEXT",
+            "ALTER TABLE contributors ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE contributors ADD COLUMN pwd_changed_at TEXT",
+        ):
+            try:
+                conn.execute(ddl)
+            except sqlite3.OperationalError:
+                pass  # colonne déjà présente
+        # Backfill : un compte sans horodatage de mdp prend sa date de création.
+        conn.execute(
+            "UPDATE contributors SET pwd_changed_at = created_at WHERE pwd_changed_at IS NULL"
+        )
+        # Demandes de réinitialisation de mot de passe (file d'attente côté admin).
+        # On NE stocke JAMAIS de jeton de reset auto-applicable : la réinitialisation
+        # passe toujours par Sam (génération d'un mdp temporaire dans le dashboard).
+        # Sans canal de vérification (e-mail/SMS), un reset en self-service serait
+        # une porte de vol de compte — l'humain dans la boucle est la mesure de sécurité.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS password_reset_requests (
+                id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                contributor_id INTEGER NOT NULL,
+                requested_at   TEXT    NOT NULL,
+                client_ip      TEXT,
+                status         TEXT    NOT NULL DEFAULT 'pending',
+                handled_at     TEXT,
+                FOREIGN KEY (contributor_id) REFERENCES contributors(id)
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_reset_status "
+            "ON password_reset_requests(status)"
+        )
+        # Signalements anonymes : nom libre facultatif que la personne peut
+        # laisser (ex. « Marie, Lorient ») pour aider Sam à juger. Pas un compte.
+        try:
+            conn.execute(
+                "ALTER TABLE contributor_observations ADD COLUMN reporter_name TEXT"
+            )
+        except sqlite3.OperationalError:
+            pass  # colonne déjà présente
+        # Compte sentinelle des signalements directs (créé une seule fois).
+        exists = conn.execute(
+            "SELECT 1 FROM contributors WHERE username = ?", (ANON_USERNAME,)
+        ).fetchone()
+        if not exists:
+            from werkzeug.security import generate_password_hash
+            import secrets as _secrets
+            conn.execute(
+                """INSERT INTO contributors
+                   (username, display_name, password_hash, status, created_at, pwd_changed_at)
+                   VALUES (?, ?, ?, 'active', ?, ?)""",
+                (ANON_USERNAME, "Signalement direct (anonyme)",
+                 generate_password_hash(_secrets.token_urlsafe(32)),
+                 _utcnow(), _utcnow()),
+            )
         conn.commit()
         logger.info("contributors_db : tables prêtes")
     finally:
@@ -145,20 +225,28 @@ def create_contributor(
 ) -> int | None:
     """Crée un compte en statut 'pending'.
 
-    Retourne l'id du nouveau compte, ou None si le username est déjà pris.
+    Retourne l'id du nouveau compte, ou None si le username est déjà pris
+    (comparaison INSENSIBLE À LA CASSE : on interdit « David » si « david »
+    existe, sinon la connexion insensible à la casse deviendrait ambiguë).
     """
     conn = get_connection(db_path)
     try:
+        exists = conn.execute(
+            "SELECT 1 FROM contributors WHERE username = ? COLLATE NOCASE",
+            (username,),
+        ).fetchone()
+        if exists:
+            return None
         cur = conn.execute(
             """INSERT INTO contributors
-               (username, display_name, password_hash, status, created_at)
-               VALUES (?, ?, ?, 'pending', ?)""",
-            (username, display_name, password_hash, _utcnow()),
+               (username, display_name, password_hash, status, created_at, pwd_changed_at)
+               VALUES (?, ?, ?, 'pending', ?, ?)""",
+            (username, display_name, password_hash, _utcnow(), _utcnow()),
         )
         conn.commit()
         return cur.lastrowid
     except sqlite3.IntegrityError:
-        # username déjà existant (contrainte UNIQUE)
+        # Garde-fou : collision sur la contrainte UNIQUE (course rarissime).
         return None
     finally:
         conn.close()
@@ -169,6 +257,25 @@ def get_by_username(username: str, db_path: Path | str = DB_PATH) -> dict | None
     try:
         row = conn.execute(
             "SELECT * FROM contributors WHERE username = ?", (username,)
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def get_by_username_ci(username: str, db_path: Path | str = DB_PATH) -> dict | None:
+    """Comme get_by_username mais INSENSIBLE À LA CASSE (connexion).
+
+    Le piège #1 des bénévoles : ils tapent « samuel » au lieu de « Samuel ».
+    L'unicité insensible à la casse est garantie à l'inscription, donc au plus
+    une ligne correspond. Les identifiants sont en ASCII (cf. USERNAME_RE),
+    COLLATE NOCASE est donc fiable ici.
+    """
+    conn = get_connection(db_path)
+    try:
+        row = conn.execute(
+            "SELECT * FROM contributors WHERE username = ? COLLATE NOCASE",
+            (username,),
         ).fetchone()
         return dict(row) if row else None
     finally:
@@ -253,9 +360,156 @@ def list_accounts(db_path: Path | str = DB_PATH) -> list[dict]:
     conn = get_connection(db_path)
     try:
         rows = conn.execute(
-            "SELECT * FROM contributors ORDER BY created_at DESC"
+            "SELECT * FROM contributors WHERE username != ? ORDER BY created_at DESC",
+            (ANON_USERNAME,),
         ).fetchall()
         return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+# ── Mots de passe : changement & réinitialisation ────────────────────────────
+
+# Alphabet sans caractères ambigus (pas de O/0, I/l/1) : un mdp temporaire doit
+# se relire et se retaper sans erreur sur un téléphone.
+_TEMP_PW_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789"
+
+
+def generate_temp_password() -> str:
+    """Mot de passe temporaire fort et lisible : 3 groupes de 4, ex. 'k7mp-q4rn-9wxy'.
+
+    ~15 bits × 3 = robuste contre le devinage, et de toute façon à usage unique :
+    le bénévole DOIT en choisir un autre à sa première connexion (must_change).
+    """
+    import secrets
+    groups = [
+        "".join(secrets.choice(_TEMP_PW_ALPHABET) for _ in range(4))
+        for _ in range(3)
+    ]
+    return "-".join(groups)
+
+
+def set_password_hash(
+    contributor_id: int,
+    password_hash: str,
+    must_change: bool = False,
+    db_path: Path | str = DB_PATH,
+) -> None:
+    """Écrit un nouveau hash de mot de passe + horodate le changement.
+
+    `pwd_changed_at` est mis à jour à chaque fois : toute autre session ouverte
+    (cookie signé sur un autre appareil) devient invalide au prochain contrôle
+    (cf. _current_contributor dans les routes) → « déconnexion partout ».
+    `must_change=True` force le choix d'un mot de passe personnel ensuite.
+    """
+    conn = get_connection(db_path)
+    try:
+        conn.execute(
+            "UPDATE contributors SET password_hash = ?, must_change_password = ?, "
+            "pwd_changed_at = ? WHERE id = ?",
+            (password_hash, 1 if must_change else 0, _utcnow(), contributor_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def reset_to_temp_password(contributor_id: int, db_path: Path | str = DB_PATH) -> str:
+    """Réinitialise (admin) le mot de passe vers un temporaire ; le RETOURNE en clair.
+
+    Le clair n'est jamais stocké : il est affiché une seule fois à Sam pour
+    qu'il le transmette. must_change=True → le bénévole devra le remplacer.
+    Solde aussi les éventuelles demandes de reset en attente pour ce compte.
+    """
+    from werkzeug.security import generate_password_hash
+    temp = generate_temp_password()
+    set_password_hash(contributor_id, generate_password_hash(temp),
+                      must_change=True, db_path=db_path)
+    mark_reset_requests_handled(contributor_id, db_path=db_path)
+    return temp
+
+
+def find_accounts_for_reset(identifier: str, db_path: Path | str = DB_PATH) -> list[dict]:
+    """Comptes ACTIFS correspondant à un identifiant OU un nom affiché (insensible
+    à la casse). Sert au « mot de passe oublié » : le bénévole tape souvent son
+    nom plutôt que son identifiant exact. 0, 1 ou (rarement) plusieurs résultats.
+    """
+    conn = get_connection(db_path)
+    try:
+        rows = conn.execute(
+            "SELECT * FROM contributors "
+            "WHERE status = 'active' AND username != ? "
+            "AND (username = ? COLLATE NOCASE OR display_name = ? COLLATE NOCASE)",
+            (ANON_USERNAME, identifier, identifier),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def add_reset_request(
+    contributor_id: int, client_ip: str | None = None, db_path: Path | str = DB_PATH
+) -> None:
+    """Enregistre une demande de reset (file admin). Une seule en attente par
+    compte : une nouvelle demande remplace la précédente non traitée."""
+    conn = get_connection(db_path)
+    try:
+        conn.execute(
+            "DELETE FROM password_reset_requests "
+            "WHERE contributor_id = ? AND status = 'pending'",
+            (contributor_id,),
+        )
+        conn.execute(
+            "INSERT INTO password_reset_requests "
+            "(contributor_id, requested_at, client_ip, status) "
+            "VALUES (?, ?, ?, 'pending')",
+            (contributor_id, _utcnow(), client_ip),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def list_pending_reset_requests(db_path: Path | str = DB_PATH) -> list[dict]:
+    """Demandes de reset en attente, enrichies du compte (pour le dashboard)."""
+    conn = get_connection(db_path)
+    try:
+        rows = conn.execute(
+            """
+            SELECT r.id, r.contributor_id, r.requested_at, r.client_ip,
+                   c.username, c.display_name, c.last_login_at
+            FROM password_reset_requests r
+            JOIN contributors c ON c.id = r.contributor_id
+            WHERE r.status = 'pending'
+            ORDER BY r.requested_at ASC
+            """
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def count_pending_reset_requests(db_path: Path | str = DB_PATH) -> int:
+    conn = get_connection(db_path)
+    try:
+        return conn.execute(
+            "SELECT COUNT(*) FROM password_reset_requests WHERE status = 'pending'"
+        ).fetchone()[0]
+    finally:
+        conn.close()
+
+
+def mark_reset_requests_handled(
+    contributor_id: int, db_path: Path | str = DB_PATH
+) -> None:
+    conn = get_connection(db_path)
+    try:
+        conn.execute(
+            "UPDATE password_reset_requests SET status = 'handled', handled_at = ? "
+            "WHERE contributor_id = ? AND status = 'pending'",
+            (_utcnow(), contributor_id),
+        )
+        conn.commit()
     finally:
         conn.close()
 
@@ -269,15 +523,19 @@ def add_observation(
     beach_name: str,
     observed_risk: str,
     coverage_pct: int | None = None,
+    sarg_location: str | None = None,
     notes: str | None = None,
     client_ip: str | None = None,
     photos: list[str] | None = None,
+    reporter_name: str | None = None,
     db_path: Path | str = DB_PATH,
 ) -> int:
     """Enregistre un signalement en attente de modération. Retourne son id.
 
     `photos` : liste de chemins relatifs (0 à 3). Stockée en JSON ; le premier
     est aussi copié dans photo_path (rétro-compat avec l'ancien schéma).
+    `sarg_location` : 'water' / 'beach' / 'both' (ou None si aucune sargasse).
+    `reporter_name` : nom libre facultatif pour les signalements anonymes.
     """
     photos = [p for p in (photos or []) if p]
     conn = get_connection(db_path)
@@ -285,15 +543,37 @@ def add_observation(
         cur = conn.execute(
             """INSERT INTO contributor_observations
                (contributor_id, observed_at, island, beach_name, observed_risk,
-                coverage_pct, notes, submitted_at, client_ip,
-                photo_path, photos_json, status)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')""",
+                coverage_pct, sarg_location, notes, submitted_at, client_ip,
+                photo_path, photos_json, reporter_name, status)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')""",
             (contributor_id, observed_at, island, beach_name, observed_risk,
-             coverage_pct, notes, _utcnow(), client_ip,
-             photos[0] if photos else None, json.dumps(photos)),
+             coverage_pct, sarg_location, notes, _utcnow(), client_ip,
+             photos[0] if photos else None, json.dumps(photos), reporter_name),
         )
         conn.commit()
         return cur.lastrowid
+    finally:
+        conn.close()
+
+
+def anonymous_contributor_id(db_path: Path | str = DB_PATH) -> int:
+    """Id du compte sentinelle des signalements anonymes (le crée au besoin)."""
+    conn = get_connection(db_path)
+    try:
+        row = conn.execute(
+            "SELECT id FROM contributors WHERE username = ?", (ANON_USERNAME,)
+        ).fetchone()
+        if row:
+            return row["id"]
+    finally:
+        conn.close()
+    # Absent (base pré-migration) : init_db le crée, puis on relit.
+    init_db(db_path)
+    conn = get_connection(db_path)
+    try:
+        return conn.execute(
+            "SELECT id FROM contributors WHERE username = ?", (ANON_USERNAME,)
+        ).fetchone()["id"]
     finally:
         conn.close()
 
@@ -445,8 +725,8 @@ def latest_public_observations(
     conn = get_connection(db_path)
     try:
         rows = conn.execute(
-            """SELECT beach_name, observed_risk, coverage_pct, observed_at,
-                      photo_path, photos_json, id
+            """SELECT beach_name, observed_risk, coverage_pct, sarg_location,
+                      observed_at, photo_path, photos_json, id
                FROM contributor_observations
                WHERE island = ? AND status = 'approved' AND observed_at >= ?
                ORDER BY observed_at DESC""",
@@ -459,6 +739,7 @@ def latest_public_observations(
                 latest[r["beach_name"]] = {
                     "risk": r["observed_risk"],
                     "coverage": r["coverage_pct"],
+                    "location": r["sarg_location"],
                     "observed_at": r["observed_at"],
                     "n_photos": len(photos_from_row(dict(r))),
                     "obs_id": r["id"],

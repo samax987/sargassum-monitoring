@@ -12,6 +12,7 @@
       <label for="username">{{ t.login_username }}</label>
       <input type="text" id="username" name="username" required
              value="{{ username or '' }}" autocapitalize="none" spellcheck="false">
+      <p class="opt" style="margin:6px 0 0">{{ t.login_id_hint }}</p>
 
       <label for="password">{{ t.login_pw }}</label>
       <input type="password" id="password" name="password" required>
@@ -22,6 +23,9 @@
     </form>
   </div>
 
+  <p class="lead">
+    <a href="{{ url_for('contrib.forgot_password') }}">{{ t.login_forgot }}</a>
+  </p>
   <p class="lead">{{ t.login_no_account }}
     <a href="{{ url_for('contrib.register') }}">{{ t.login_create_link }}</a></p>
 {% endblock %}

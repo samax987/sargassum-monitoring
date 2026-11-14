@@ -1182,6 +1182,34 @@ elif page == "Contributeurs":
         "(source « contributor ») et alimente la calibration."
     )
 
+    # ── Mot de passe temporaire fraîchement généré (affiché UNE fois) ─────────
+    # Stocké en session Streamlit après un clic « Réinitialiser ». On l'affiche
+    # tant que Sam ne l'a pas effacé : le clair n'est jamais en base.
+    _rt = st.session_state.get("reset_temp")
+    if _rt:
+        st.success(
+            f"🔑 Mot de passe temporaire pour **{_rt['name']}** "
+            f"(identifiant `{_rt['username']}`)"
+        )
+        st.code(_rt["pw"], language=None)
+        st.caption(
+            "Copie-le et transmets-le au bénévole (WhatsApp/SMS/en personne). "
+            "Il devra choisir SON propre mot de passe à la première connexion. "
+            "Ce code ne sera plus affiché ensuite."
+        )
+        if st.button("✓ J'ai transmis — effacer", key="clear_reset_temp"):
+            del st.session_state["reset_temp"]
+            st.rerun()
+        st.divider()
+
+    def _do_reset(acc: dict) -> None:
+        """Réinitialise le mdp d'un compte → mdp temporaire affiché une fois."""
+        temp = contributors_db.reset_to_temp_password(acc["id"], db_path)
+        st.session_state["reset_temp"] = {
+            "name": acc["display_name"], "username": acc["username"], "pw": temp,
+        }
+        st.rerun()
+
     RISK_FR = {"none": "Aucune", "low": "Un peu",
                "medium": "Moyennement", "high": "Beaucoup"}
 
@@ -1207,6 +1235,33 @@ elif page == "Contributeurs":
 
     st.divider()
 
+    # ── Demandes de mot de passe oublié ──────────────────────────────────────
+    reset_reqs = contributors_db.list_pending_reset_requests(db_path)
+    st.subheader(f"🔑 Mots de passe oubliés ({len(reset_reqs)})")
+    if not reset_reqs:
+        st.info("Aucune demande de réinitialisation en attente.")
+    else:
+        st.caption(
+            "Un bénévole a cliqué « mot de passe oublié ». Génère-lui un mot de "
+            "passe temporaire et transmets-le-lui — il en choisira un nouveau ensuite."
+        )
+        for r in reset_reqs:
+            with st.container(border=True):
+                c1, c2 = st.columns([4, 1])
+                c1.markdown(f"**{r['display_name']}** &nbsp; `{r['username']}`")
+                last = (r["last_login_at"] or "jamais connecté")[:16].replace("T", " ")
+                c1.caption(
+                    f"Demandé le {r['requested_at'][:16].replace('T', ' ')} "
+                    f"· dernière connexion : {last}"
+                )
+                if c2.button("🔑 Réinitialiser", key=f"reset_req_{r['id']}",
+                             width="stretch"):
+                    _do_reset({"id": r["contributor_id"],
+                               "display_name": r["display_name"],
+                               "username": r["username"]})
+
+    st.divider()
+
     # ── Signalements en attente de modération ────────────────────────────────
     st.subheader("📍 Signalements à valider")
     pending_obs = contributors_db.list_pending_observations(db_path)
@@ -1222,8 +1277,14 @@ elif page == "Contributeurs":
                     f"{RISK_FR.get(o['observed_risk'], o['observed_risk'])}{cov}"
                 )
                 note_txt = f" · 📝 {o['notes']}" if o["notes"] else ""
+                # Signalement direct (anonyme) : on montre le prénom laissé, sinon
+                # « anonyme », avec un repère 🌐 ; sinon le nom du compte.
+                if o.get("username") == contributors_db.ANON_USERNAME:
+                    who = f"🌐 {o.get('reporter_name') or 'anonyme'} (signalement direct)"
+                else:
+                    who = o["display_name"]
                 c1.caption(
-                    f"par {o['display_name']} · observé "
+                    f"par {who} · observé "
                     f"{o['observed_at'][:16].replace('T', ' ')}{note_txt}"
                 )
                 # Photos jointes (jusqu'à 3) : affichées en local (le dashboard
@@ -1280,6 +1341,14 @@ elif page == "Contributeurs":
                         contributors_db.set_account_status(
                             acc["id"], contributors_db.ACCOUNT_BANNED, db_path)
                         st.rerun()
+                # Réinitialisation manuelle (utile pour débloquer un bénévole qui
+                # ne sait pas se servir du « mot de passe oublié »).
+                if st.button("🔑 Réinitialiser le mot de passe", width="stretch",
+                             key=f"reset_mgmt_{acc['id']}"):
+                    _do_reset(acc)
+                if acc["must_change_password"]:
+                    st.caption("⏳ Un mot de passe temporaire est actif : le bénévole "
+                               "doit en choisir un nouveau à sa prochaine connexion.")
 
 
 # ── Page 7 : Calibration prédit vs observé ────────────────────────────────────

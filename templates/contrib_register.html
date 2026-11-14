@@ -5,6 +5,10 @@
 
   {% if registered %}
     <div class="alert ok">{{ t.reg_success }}</div>
+    {% if username %}
+      <div class="alert info">{{ t.reg_your_id }}<br>
+        <strong style="font-size:1.15rem; letter-spacing:.02em">{{ username }}</strong></div>
+    {% endif %}
     <div class="btn-row">
       <a class="btn ghost" href="{{ url_for('contrib.home') }}">{{ t.btn_back_home }}</a>
     </div>

@@ -1,0 +1,40 @@
+{% extends "contrib_base.html" %}
+{% block title %}{{ t.chpw_title }}{% endblock %}
+{% block content %}
+  <h1>{{ t.chpw_title }}</h1>
+
+  {% if done %}
+    <div class="alert ok">{{ t.chpw_success }}</div>
+    <div class="btn-row">
+      <a class="btn" href="{{ url_for('contrib.observer') }}">{{ t.chpw_go_report }}</a>
+    </div>
+  {% else %}
+    {% if forced %}
+      <div class="alert info">{{ t.chpw_lead_forced }}</div>
+    {% else %}
+      <p class="lead">{{ t.chpw_lead }}</p>
+    {% endif %}
+    {% if error %}<div class="alert error">{{ error }}</div>{% endif %}
+
+    <div class="card">
+      <form method="post" action="{{ url_for('contrib.change_password') }}" autocomplete="off">
+        <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+
+        <label for="current_password">{{ t.chpw_current }}
+          <span class="opt">{{ t.chpw_current_hint }}</span></label>
+        <input type="password" id="current_password" name="current_password" required>
+
+        <label for="new_password">{{ t.chpw_new }}
+          <span class="opt">{{ t.reg_pw_hint }}</span></label>
+        <input type="password" id="new_password" name="new_password" required minlength="8">
+
+        <label for="new_password2">{{ t.chpw_new2 }}</label>
+        <input type="password" id="new_password2" name="new_password2" required minlength="8">
+
+        <div class="btn-row">
+          <button class="btn block" type="submit">{{ t.chpw_submit }}</button>
+        </div>
+      </form>
+    </div>
+  {% endif %}
+{% endblock %}

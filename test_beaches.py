@@ -435,6 +435,22 @@ class TestComputeBeachScoresIntegration(unittest.TestCase):
         conn.close()
         self.assertEqual(vals, [(None,)])
 
+    def test_archive_note_le_semis_date(self):
+        """Le semis daté noté par le collecteur est recopié dans forecast_archive (2026-11-16)."""
+        for meta, attendu in (('{"day": 0, "seed_dated": true}', 1), ('{"day": 0, "seed_dated": false}', 0),
+                              ('{"day": 0, "seed_dated": null}', None), ('{"day": 0}', None)):
+            conn = sqlite3.connect(self.db_path)
+            conn.execute("DELETE FROM forecast_archive") if conn.execute(
+                "SELECT name FROM sqlite_master WHERE name='forecast_archive'").fetchone() else None
+            conn.execute("UPDATE drift_predictions SET raw_metadata = ?", (meta,))
+            conn.commit()
+            conn.close()
+            beaches.compute_beach_scores(self.db_path)
+            conn = sqlite3.connect(self.db_path)
+            vals = conn.execute("SELECT DISTINCT seed_dated FROM forecast_archive").fetchall()
+            conn.close()
+            self.assertEqual(vals, [(attendu,)], meta)
+
     def test_region_blob_scoring_mode(self):
         """Avec positions_region_blob, le scoring se fait sur le jeu complet (ratio 1)
         et compte les particules échouées dans le rayon de la plage."""

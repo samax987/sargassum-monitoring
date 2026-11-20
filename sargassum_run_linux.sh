@@ -10,6 +10,12 @@ export ENABLE_STOKES_DRIFT=1
 # qui sont surtout du faux signal satellite (mesuré le 2026-11-10, voir CLAUDE.md).
 # Pour revenir en arrière : commenter la ligne suivante.
 export SARGA_SEED_COAST_KM=15
+# Semis daté des points de départ : ÉTEINT. Chaque pixel serait transporté par les
+# courants, le vent et les vagues des jours passés depuis le jour où le satellite
+# l a vu jusqu à maintenant (voir CLAUDE.md, témoin du 2026-11-16). Ajoute environ
+# 60 téléchargements de vent et une dérive de plus par passage.
+# Pour l allumer : retirer le # de la ligne suivante.
+# export SARGA_SEED_DATED=1
 # cache matplotlib dans un dossier accessible a webapps : sans lui, matplotlib
 # recree son cache a chaque run et perd quelques secondes en avertissements.
 export MPLCONFIGDIR=/opt/sargassum/.cache/matplotlib

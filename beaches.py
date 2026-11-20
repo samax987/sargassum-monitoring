@@ -556,6 +556,7 @@ _ARCHIVE_NEW_COLUMNS = [
     # Masque côtier des points de départ de la simulation utilisée (km, 0 = aucun,
     # NULL = inconnu). Sert à ne pas mélanger les régimes dans la vérification.
     ("seed_coast_km",   "REAL"),
+    ("seed_dated",      "INTEGER"),
 ]
 
 # Archive des prévisions, JAMAIS purgée : c'est la matière première de la
@@ -644,6 +645,15 @@ def _seed_coast_km(raw_metadata: str | None) -> float | None:
         return None
 
 
+def _seed_dated(raw_metadata: str | None) -> int | None:
+    """Semis daté noté par le collecteur dans raw_metadata : 1, 0, ou None si absent ou illisible."""
+    try:
+        v = json.loads(raw_metadata or "{}").get("seed_dated")
+        return int(bool(v)) if isinstance(v, bool) else None
+    except (ValueError, TypeError, AttributeError):
+        return None
+
+
 def compute_beach_scores(db_path: Path = DB_PATH) -> int:
     conn = _get_conn(db_path)
 
@@ -686,6 +696,9 @@ def compute_beach_scores(db_path: Path = DB_PATH) -> int:
     if seed_coast_km is not None:
         print(f"  🧹 Masque côtier des points de départ : "
               + (f"{seed_coast_km:g} km" if seed_coast_km > 0 else "aucun"))
+    seed_dated     = _seed_dated(snaps[0]["raw_metadata"])
+    if seed_dated:
+        print("  🕒 Semis daté : points de départ transportés jusqu'à l'heure de la simulation")
 
     biases = _load_latest_biases(conn) if APPLY_BIAS_CORRECTION else {}
     sim_dt = datetime.fromisoformat(simulated_at.replace("Z", "+00:00"))
@@ -778,7 +791,7 @@ def compute_beach_scores(db_path: Path = DB_PATH) -> int:
                 s["closest_km"], s["n_stranded"],
                 level, presence_label(s["local_score"]), scoring_mode,
                 s["local_score_raw"], presence_label(s["local_score_raw"]),
-                s["regional_exposed"], s["exposed_frac"], seed_coast_km,
+                s["regional_exposed"], s["exposed_frac"], seed_coast_km, seed_dated,
             ))
 
     if APPLY_BIAS_CORRECTION:
@@ -806,8 +819,8 @@ def compute_beach_scores(db_path: Path = DB_PATH) -> int:
            (computed_at, simulated_at, island, beach_name, day_offset, target_date,
             est_count, local_score, regional_score, closest_km, n_stranded,
             risk_level, presence, scoring_mode, local_score_raw, presence_raw,
-            regional_exposed, exposed_frac, seed_coast_km)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            regional_exposed, exposed_frac, seed_coast_km, seed_dated)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         archive_rows,
     )
     conn.commit()

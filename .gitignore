@@ -46,3 +46,5 @@ contrib_photos/
 
 # Cache matplotlib du pipeline
 .cache/
+*.db-shm
+*.db-wal

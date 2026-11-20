@@ -1018,6 +1018,416 @@ def _masque_cotier(lons: np.ndarray, lats: np.ndarray, km: float) -> np.ndarray:
     return garder
 
 
+# ── Semis daté (inactif par défaut : SARGA_SEED_DATED=1 pour l'activer) ──────
+# Le composite 7 jours garde des pixels vus pour la dernière fois il y a 4 à 6
+# jours, et la simulation les sème là où ils ont été VUS, comme s'ils y étaient
+# encore. Le semis daté retrouve le dernier jour où chaque pixel a été vu sur
+# les images 1 jour, puis le fait dériver avec les courants, le vent et les
+# vagues PASSÉS jusqu'à maintenant. La prévision repart ensuite de là, inchangée.
+# Mesuré le 2026-11-16 sur mai-juillet 2026 : au large, une détection ainsi
+# déplacée est retrouvée dans 71 % des cas contre 67 % laissée sur place
+# (voir CLAUDE.md). Hors saison le test disait l'inverse : c'est pour cela que
+# le réglage est éteint par défaut.
+SEMIS_DATE_H_OBS = 16          # heure UTC retenue pour le passage du satellite
+SEMIS_DATE_JOURS = 7           # nombre d'images 1 jour relues
+SEMIS_DATE_IMAGE_MAX_H = 72    # composite plus vieux que ça (compté depuis 12 h UTC) : panne du jeu AFAI, on refuse
+SEMIS_DATE_MAX_H = 216         # plafond de la dérive de rattrapage : 6 jours de fenêtre + 72 h de retard toléré,
+                               # pour qu'aucun pixel accepté ne soit lâché plus tard que son observation
+SEMIS_DATE_NON_DATES_MAX = 0.5  # part de points sans date au-delà de laquelle on refuse (fenêtres alignées : 0)
+SEMIS_DATE_PAS_H = 3           # même pas de temps que la prévision
+
+
+def _lire_semis_date() -> bool:
+    """
+    Lit SARGA_SEED_DATED : absent, vide ou 0 = semis habituel ; 1 = semis daté.
+    Toute autre valeur lève ValueError : on refuse de deviner un réglage mal écrit.
+    """
+    brut = (os.environ.get("SARGA_SEED_DATED", "") or "0").strip()
+    if brut not in ("0", "1"):
+        raise ValueError(f"SARGA_SEED_DATED illisible : {brut!r} (attendu 0 ou 1)")
+    return brut == "1"
+
+
+def _fetch_afai_1j(dossier: Path, fin: datetime, stride: int = 3, jours: int = SEMIS_DATE_JOURS):
+    """
+    Télécharge les images AFAI 1 jour des `jours` jours qui finissent à la date `fin`
+    (celle du composite 7 jours semé), même zone et même pas que le semis.
+    On demande des DATES et non « les 7 dernières » : les deux jeux ne sont pas
+    toujours publiés au même moment, et un jour manquant décalerait la fenêtre.
+    ERDDAP rend la date la plus proche quand celle demandée manque : c'est
+    _fenetre_du_composite qui écarte ensuite ce qui déborde.
+    Retourne (lats, lons, instants, images) avec images de forme (jour, lat, lon).
+    """
+    import xarray as xr
+
+    deb = fin - timedelta(days=jours - 1)
+    t_req = f"[({deb:%Y-%m-%d}T12:00:00Z):1:({fin:%Y-%m-%d}T12:00:00Z)]"
+    q = (f"AFAI{t_req}[({CARIB['lat_min']}):{stride}:({CARIB['lat_max']})]"
+         f"[({CARIB['lon_min']}):{stride}:({CARIB['lon_max']})]")
+    url = ("https://cwcgom.aoml.noaa.gov/erddap/griddap/noaa_aoml_atlantic_oceanwatch_AFAI_1D.nc?"
+           + q.replace("[", "%5B").replace("]", "%5D"))
+    r = requests.get(url, headers=HEADERS, timeout=600)
+    r.raise_for_status()
+    f = dossier / "afai_1j.nc"
+    f.write_bytes(r.content)
+    with xr.open_dataset(f) as ds:
+        images = ds["AFAI"].values.astype("float32")
+        lats = ds["latitude"].values.astype("float64")
+        lons = ds["longitude"].values.astype("float64")
+        instants = [datetime.utcfromtimestamp(int(t)) for t in
+                    ds["time"].values.astype("datetime64[s]").astype("int64")]
+    f.unlink(missing_ok=True)
+    return lats, lons, instants, images
+
+
+def _fenetre_du_composite(instants: list, images: np.ndarray, jour_composite: datetime,
+                          jours: int = SEMIS_DATE_JOURS):
+    """
+    Ne garde que les images 1 jour des `jours` jours du composite (du jour J-6 au jour J).
+    Lève RuntimeError si l'image du jour J manque : les deux jeux ne parlent alors pas
+    de la même semaine, et dater avec serait faux.
+    """
+    j = jour_composite.date()
+    garde = [i for i, t in enumerate(instants) if 0 <= (j - t.date()).days < jours]
+    if not garde or instants[garde[-1]].date() != j:
+        vues = ", ".join(f"{t:%d/%m}" for t in instants) or "aucune"
+        raise RuntimeError(f"pas d'image 1 jour pour le jour du composite ({j:%d/%m/%Y}) ; images reçues : {vues}")
+    return [instants[i] for i in garde], images[garde]
+
+
+def _dernier_jour_vu(lons: np.ndarray, lats: np.ndarray, lat_axe: np.ndarray, lon_axe: np.ndarray,
+                     images: np.ndarray, seuil: float = 0.0001) -> np.ndarray:
+    """
+    Pour chaque point de départ, indice de la DERNIÈRE image 1 jour où son pixel
+    dépasse le seuil ; -1 si aucune image ne le montre ou s'il est hors grille.
+
+    Les images 1 jour et le composite 7 jours n'écrivent pas leurs coordonnées
+    avec les mêmes décimales : on rapproche par pixel le plus proche. Un point
+    à plus d'un demi-pixel au-delà du bord de la grille est hors grille (-1).
+    """
+    n = len(lons)
+    dernier = np.full(n, -1, dtype=int)
+    if n == 0 or images.shape[0] == 0 or len(lat_axe) < 2 or len(lon_axe) < 2:
+        return dernier
+    dlat = float(lat_axe[1] - lat_axe[0])
+    dlon = float(lon_axe[1] - lon_axe[0])
+    with np.errstate(invalid="ignore"):
+        ii = np.rint((np.asarray(lats, float) - lat_axe[0]) / dlat)
+        jj = np.rint((np.asarray(lons, float) - lon_axe[0]) / dlon)
+    ok = np.isfinite(ii) & np.isfinite(jj) & (ii >= 0) & (ii < len(lat_axe)) & (jj >= 0) & (jj < len(lon_axe))
+    ii = np.where(ok, ii, 0).astype(int)
+    jj = np.where(ok, jj, 0).astype(int)
+    with np.errstate(invalid="ignore"):
+        vu = images[:, ii, jj] > seuil                 # (jour, point) ; un NaN (nuage) compte pour « pas vu »
+    nj = vu.shape[0]
+    a_vu = vu.any(axis=0) & ok
+    dernier[a_vu] = (nj - 1) - np.argmax(vu[::-1], axis=0)[a_vu]
+    return dernier
+
+
+def _heures_de_derive(dernier: np.ndarray, instants: list, maintenant: datetime) -> np.ndarray:
+    """
+    Durée de la dérive de rattrapage de chaque point, en heures, multiple du pas
+    de temps (3 h) pour que la dérive s'arrête exactement à `maintenant`.
+    0 = point laissé sur place (jamais daté, ou vu il y a moins de 1 h 30).
+    L'heure du passage satellite est prise à 16 h UTC le jour de l'image.
+    """
+    heures = np.zeros(len(dernier), dtype=int)
+    for j, inst in enumerate(instants):
+        obs = inst.replace(hour=SEMIS_DATE_H_OBS, minute=0, second=0, microsecond=0)
+        h = (maintenant - obs).total_seconds() / 3600.0
+        if h <= 0:
+            continue                                   # image « du futur » (horloge) : sur place
+        h = int(round(h / SEMIS_DATE_PAS_H)) * SEMIS_DATE_PAS_H
+        heures[dernier == j] = min(h, SEMIS_DATE_MAX_H)
+    return heures
+
+
+def _positions_finales(lon_t: np.ndarray, lat_t: np.ndarray, statut_t: np.ndarray,
+                       code_echoue: float, lon0: np.ndarray, lat0: np.ndarray,
+                       code_actif: float = 0.0):
+    """
+    Position de chaque particule à la fin de la dérive de rattrapage.
+    Tableaux de forme (temps, particule). Retourne (lon, lat, etat) :
+      etat 0 = en mer à la fin, à sa dernière position ;
+      etat 1 = échouée en route : rendue à sa DERNIÈRE POSITION EN MER (la prévision
+               la refera échouer si le courant porte toujours à la côte), ou à son
+               point de départ si elle n'a jamais été vue en mer ;
+      etat 2 = perdue (sortie des données de courant) : position NaN, à écarter.
+    """
+    lon_t = np.where(np.abs(lon_t) > 400, np.nan, lon_t.astype(float))
+    lat_t = np.where(np.abs(lat_t) > 400, np.nan, lat_t.astype(float))
+    nt, n = lon_t.shape
+    en_mer = np.isfinite(lon_t) & np.isfinite(lat_t) & (statut_t == code_actif)
+    a_ete_en_mer = en_mer.any(axis=0)
+    i_mer = (nt - 1) - np.argmax(en_mer[::-1], axis=0)   # dernier pas en mer
+    cols = np.arange(n)
+    lon = np.where(a_ete_en_mer, lon_t[i_mer, cols], np.nan)
+    lat = np.where(a_ete_en_mer, lat_t[i_mer, cols], np.nan)
+    echouee = (statut_t == code_echoue).any(axis=0)
+    etat = np.full(n, 2, dtype=int)
+    etat[en_mer[-1]] = 0
+    etat[echouee & ~en_mer[-1]] = 1
+    jamais = (etat == 1) & ~a_ete_en_mer
+    lon[jamais], lat[jamais] = lon0[jamais], lat0[jamais]
+    lon[etat == 2], lat[etat == 2] = np.nan, np.nan
+    return lon, lat, etat
+
+
+def _deriver_graines(lons: np.ndarray, lats: np.ndarray, heures: np.ndarray, maintenant: datetime,
+                     fichiers: list, dossier: Path, vent: bool):
+    """
+    Dérive de rattrapage : chaque point est lâché `heures` avant `maintenant`
+    et transporté jusqu'à `maintenant` avec les mêmes réglages que la prévision.
+    `fichiers` = fichiers NetCDF de forçage du passé (courants, vent, vagues).
+    Retourne (lons, lats, etat) de même longueur que l'entrée (voir _positions_finales) ;
+    les points à 0 heure ne bougent pas (etat 0).
+    """
+    import gc
+    import xarray as xr
+    from opendrift.models.oceandrift import OceanDrift
+    from opendrift.readers.reader_netCDF_CF_generic import Reader as NCReader
+
+    lons = np.asarray(lons, float)
+    lats = np.asarray(lats, float)
+    lon_f, lat_f = lons.copy(), lats.copy()
+    etat = np.zeros(len(lons), dtype=int)
+    if not (heures > 0).any():
+        return lon_f, lat_f, etat
+
+    od = OceanDrift(loglevel=50)
+    od.add_reader([NCReader(str(f)) for f in fichiers])
+    od.set_config("general:use_auto_landmask", True)
+    od.set_config("general:coastline_action", "stranding")
+    if vent:
+        od.set_config("seed:wind_drift_factor", 0.01)
+    groupes = []
+    for h in sorted({int(h) for h in heures[heures > 0]}, reverse=True):   # les plus anciennes d'abord
+        sel = np.where(heures == h)[0]
+        od.seed_elements(lon=lons[sel], lat=lats[sel], time=maintenant - timedelta(hours=h))
+        groupes.append(sel)
+    ordre = np.concatenate(groupes)              # ordre des particules dans la sortie
+    sortie = dossier / "rattrapage.nc"
+    try:
+        od.run(end_time=maintenant, time_step=timedelta(hours=SEMIS_DATE_PAS_H),
+               time_step_output=timedelta(hours=SEMIS_DATE_PAS_H), outfile=str(sortie))
+    except ValueError as e:
+        # Toutes les particules échouées dès le premier pas : OpenDrift n'écrit rien.
+        # On les rend à leur point de départ, comme toute échouée jamais vue en mer.
+        if "first timestep" not in str(e):
+            raise
+        etat[ordre] = 1
+        return lon_f, lat_f, etat
+    with xr.open_dataset(sortie) as s:
+        ax = s["lon"].dims.index("time")
+        lon_t = np.moveaxis(s["lon"].values, ax, 0)
+        lat_t = np.moveaxis(s["lat"].values, ax, 0)
+        st_t = np.moveaxis(s["status"].values, ax, 0).astype(float)
+        sens = str(s["status"].attrs.get("flag_meanings", "")).split()
+        vals = [float(v) for v in np.atleast_1d(s["status"].attrs.get("flag_values", list(range(len(sens)))))]
+        fin_sortie = s["time"].values[-1].astype("datetime64[s]").astype("int64")
+    if lon_t.shape[1] != len(ordre):
+        raise RuntimeError(f"dérive de rattrapage : {lon_t.shape[1]} particules en sortie pour {len(ordre)} semées")
+    if "active" not in sens:
+        raise RuntimeError(f"statuts OpenDrift inattendus : {sens}")
+    # OpenDrift s'arrête de lui-même, avant l'heure visée, quand plus aucune particule
+    # n'est en mer (toutes échouées) : sortie plus courte mais complète, on l'accepte.
+    # Tout autre arrêt avant l'heure est une panne.
+    ecart_s = abs(int(fin_sortie) - int((maintenant - datetime(1970, 1, 1)).total_seconds()))
+    encore_en_mer = int((st_t[-1] == vals[sens.index("active")]).sum())
+    if ecart_s > 60 and encore_en_mer:
+        raise RuntimeError(f"dérive de rattrapage arrêtée à {ecart_s} s de l'heure visée "
+                           f"avec {encore_en_mer} particules encore en mer")
+    # OpenDrift ne liste que les statuts rencontrés : sans échouage, « stranded » est absent.
+    code_echoue = vals[sens.index("stranded")] if "stranded" in sens else float("nan")
+    lo, la, et = _positions_finales(lon_t, lat_t, st_t, code_echoue,
+                                    lons[ordre], lats[ordre], vals[sens.index("active")])
+    lon_f[ordre], lat_f[ordre], etat[ordre] = lo, la, et
+    sortie.unlink(missing_ok=True)
+    del od, lon_t, lat_t, st_t
+    gc.collect()                                  # rendre la mémoire avant la prévision (serveur à 4 Go)
+    return lon_f, lat_f, etat
+
+
+def _gfs_un_pas(run_dt: datetime, fh: int, tmpdir: Path):
+    """Un champ de vent GFS 10 m (run + échéance en heures), chargé en mémoire, zone Caraïbes."""
+    import xarray as xr
+
+    url = (
+        f"https://nomads.ncep.noaa.gov/cgi-bin/filter_gfs_0p25.pl"
+        f"?file=gfs.t{run_dt:%H}z.pgrb2.0p25.f{fh:03d}"
+        f"&var_UGRD=on&var_VGRD=on&lev_10_m_above_ground=on"
+        f"&leftlon={CARIB['lon_min'] - 3}&rightlon={CARIB['lon_max'] + 3}"
+        f"&toplat={CARIB['lat_max'] + 3}&bottomlat={CARIB['lat_min'] - 3}"
+        f"&dir=%2Fgfs.{run_dt:%Y%m%d}%2F{run_dt:%H}%2Fatmos"
+    )
+    grib = tmpdir / f"gfs_{run_dt:%Y%m%d%H}_f{fh:03d}.grib2"
+    try:
+        r = requests.get(url, timeout=120)
+        r.raise_for_status()
+        grib.write_bytes(r.content)
+        with xr.open_dataset(grib, engine="cfgrib", backend_kwargs={"indexpath": ""}) as brut:
+            ds = brut[["u10", "v10"]].rename({"u10": "x_wind", "v10": "y_wind"}).load()
+    finally:
+        grib.unlink(missing_ok=True)
+    if float(ds["longitude"].max()) > 180.0:      # NOMADS répond en 0-360
+        ds = ds.assign_coords(longitude=(((ds["longitude"] + 180) % 360) - 180)).sortby("longitude")
+    ds = ds.sel(latitude=slice(CARIB["lat_max"] + 3, CARIB["lat_min"] - 3),
+                longitude=slice(CARIB["lon_min"] - 3, CARIB["lon_max"] + 3)).sortby("latitude")
+    return ds.drop_vars([c for c in ds.coords if c not in ("latitude", "longitude")], errors="ignore")
+
+
+def _plan_vent_passe(debut: datetime, fin: datetime, maintenant: datetime) -> list:
+    """
+    Liste (instant, run GFS, échéance) couvrant [debut, fin] toutes les 3 h.
+    Pour chaque instant on prend l'analyse du run qui le précède (échéance 0 ou 3 h) ;
+    pour les dernières heures, pas encore analysées, le dernier run publié
+    (environ 3 h 30 après son heure) avec une échéance plus longue.
+    """
+    dispo = maintenant - timedelta(hours=3, minutes=30)
+    dernier_run = dispo.replace(hour=(dispo.hour // 6) * 6, minute=0, second=0, microsecond=0)
+    t = debut.replace(hour=(debut.hour // 3) * 3, minute=0, second=0, microsecond=0)
+    plan = []
+    while True:
+        run = min(t.replace(hour=(t.hour // 6) * 6), dernier_run)
+        plan.append((t, run, int((t - run).total_seconds() // 3600)))
+        if t >= fin:
+            break
+        t += timedelta(hours=3)
+    return plan
+
+
+def _fetch_gfs_wind_passe(out_path: Path, debut: datetime, fin: datetime, maintenant: datetime) -> int:
+    """
+    Vent GFS 10 m des jours PASSÉS (NOMADS garde environ 10 jours), écrit comme le
+    vent de la prévision (x_wind, y_wind). Les pas manquants sont comblés par
+    interpolation dans le temps ; au-delà de 10 % de manquants, ou si un bord
+    manque, on lève une erreur plutôt que de dériver avec un vent troué.
+    Retourne le nombre de pas réellement téléchargés.
+    """
+    import xarray as xr
+
+    plan = _plan_vent_passe(debut, fin, maintenant)
+    tmpdir = out_path.parent / "gfs_passe_tmp"
+    tmpdir.mkdir(exist_ok=True)
+    morceaux = []
+    for t, run, fh in plan:
+        try:
+            ds = _gfs_un_pas(run, fh, tmpdir)
+            morceaux.append(ds.expand_dims(time=[np.datetime64(t)]))
+        except Exception as e:
+            print(f"    [warn] vent passé {t:%Y-%m-%d %Hh} (run {run:%d %Hh} +{fh} h) indisponible : {e}")
+        time.sleep(0.4)                           # NOMADS bloque au-delà de 120 requêtes par minute
+    shutil.rmtree(tmpdir, ignore_errors=True)
+    n_ok = len(morceaux)
+    if n_ok < 0.9 * len(plan):
+        raise RuntimeError(f"vent passé : seulement {n_ok} pas sur {len(plan)}")
+    vent = xr.concat(morceaux, dim="time").sortby("time")
+    axe = np.array([np.datetime64(t) for t, _, _ in plan])
+    if vent["time"].values[0] != axe[0] or vent["time"].values[-1] != axe[-1]:
+        raise RuntimeError("vent passé : le premier ou le dernier pas manque")
+    if n_ok < len(plan):
+        vent = vent.interp(time=axe)
+    vent["x_wind"].attrs = {"units": "m s-1", "standard_name": "x_wind"}
+    vent["y_wind"].attrs = {"units": "m s-1", "standard_name": "y_wind"}
+    vent.to_netcdf(out_path)
+    vent.close()
+    return n_ok
+
+
+def _semis_date(lons: np.ndarray, lats: np.ndarray, stride: int, cp_user: str, cp_pass: str,
+                afai_date: str | None, maintenant: datetime | None = None):
+    """
+    Semis daté complet : date chaque point de départ sur les images 1 jour de la semaine
+    du composite (`afai_date`, la date rendue par _fetch_afai_positions), télécharge
+    les forçages du passé, fait la dérive de rattrapage. Retourne (lons, lats, bilan).
+    Toute panne lève une exception : la simulation échoue et le signale, plutôt que
+    de repartir en silence avec le semis habituel (deux régimes mélangés sans trace).
+    """
+    import copernicusmarine
+
+    if maintenant is None:                        # heure UTC sans fuseau ; paramètre pour les tests
+        maintenant = datetime.now(timezone.utc).replace(tzinfo=None, microsecond=0)
+    fmt = "%Y-%m-%dT%H:%M:%S"
+    tmpdir = Path(tempfile.mkdtemp(prefix="sarg_semis_date_"))
+    try:
+        try:
+            jour_composite = datetime.strptime(str(afai_date)[:10], "%Y-%m-%d").replace(hour=12)
+        except ValueError:
+            raise RuntimeError(f"date du composite 7 jours illisible : {afai_date!r}")
+        # Panne longue du jeu AFAI (c'est arrivé 10 jours en juillet 2025) : on refuse de
+        # dater avec un composite périmé. La simulation échoue et le dit, à chaque passage,
+        # tant que la panne dure ; la carte garde la dernière dérive réussie.
+        age_image_h = (maintenant - jour_composite).total_seconds() / 3600.0
+        if age_image_h > SEMIS_DATE_IMAGE_MAX_H:
+            raise RuntimeError(f"jeu AFAI en panne : le composite 7 jours date de {age_image_h:.0f} h "
+                               f"(limite {SEMIS_DATE_IMAGE_MAX_H} h)")
+        lat_axe, lon_axe, instants, images = _fetch_afai_1j(tmpdir, jour_composite, stride=stride)
+        instants, images = _fenetre_du_composite(instants, images, jour_composite)
+        dernier = _dernier_jour_vu(lons, lats, lat_axe, lon_axe, images)
+        del images
+        n_non_dates = int((dernier < 0).sum())
+        # Fenêtres alignées, un pixel du composite se retrouve sur au moins une image 1 jour.
+        # Beaucoup de points sans date = grilles ou semaines décalées : on refuse plutôt que
+        # de semer sur place en se disant « daté ».
+        if len(lons) and n_non_dates > SEMIS_DATE_NON_DATES_MAX * len(lons):
+            raise RuntimeError(f"{n_non_dates} points sur {len(lons)} introuvables sur les images 1 jour")
+        heures = _heures_de_derive(dernier, instants, maintenant)
+        bilan = {
+            "n_points": int(len(lons)),
+            "n_non_dates": n_non_dates,
+            "n_derives": int((heures > 0).sum()),
+            "age_median_h": float(np.median(heures[heures > 0])) if (heures > 0).any() else 0.0,
+            "age_max_h": int(heures.max()) if len(heures) else 0,
+            "image_1j_derniere": max(instants).strftime("%Y-%m-%d"),
+            "age_composite_h": round(age_image_h, 1),
+            "n_images_1j": len(instants),
+            "n_echoues_avant": 0, "n_perdus": 0, "stokes": False, "vent_pas": 0,
+        }
+        print(f"    → Semis daté : {bilan['n_derives']} points à faire dériver "
+              f"(âge médian {bilan['age_median_h']:.0f} h, max {bilan['age_max_h']} h), "
+              f"{bilan['n_non_dates']} sans date laissés sur place")
+        if bilan["n_derives"] == 0:
+            return lons, lats, bilan
+
+        debut = maintenant - timedelta(hours=int(heures.max()))
+        boite = dict(minimum_latitude=CARIB["lat_min"] - 3, maximum_latitude=CARIB["lat_max"] + 3,
+                     minimum_longitude=CARIB["lon_min"] - 3, maximum_longitude=CARIB["lon_max"] + 3)
+        ds = copernicusmarine.open_dataset(
+            dataset_id="cmems_mod_glo_phy-cur_anfc_0.083deg_P1D-m", username=cp_user, password=cp_pass,
+            variables=["uo", "vo"], minimum_depth=0.5, maximum_depth=0.5,
+            start_datetime=(debut - timedelta(days=1)).strftime(fmt),
+            end_datetime=(maintenant + timedelta(days=1)).strftime(fmt), **boite)
+        anfc_nc = tmpdir / "anfc_passe.nc"
+        ds.rename({"uo": "x_sea_water_velocity", "vo": "y_sea_water_velocity"}).to_netcdf(anfc_nc)
+        ds.close()
+        fichiers = [anfc_nc]
+
+        vent_nc = tmpdir / "vent_passe.nc"
+        bilan["vent_pas"] = _fetch_gfs_wind_passe(vent_nc, debut, maintenant, maintenant)
+        fichiers.append(vent_nc)
+
+        if ENABLE_STOKES_DRIFT:                   # même tolérance que la prévision : sans vagues, on continue
+            stokes_nc = tmpdir / "stokes_passe.nc"
+            bilan["stokes"] = bool(_fetch_stokes_drift_caribbean(
+                stokes_nc, cp_user, cp_pass, debut - timedelta(hours=6), maintenant + timedelta(hours=6)))
+            if bilan["stokes"]:
+                fichiers.append(stokes_nc)
+
+        lon_f, lat_f, etat = _deriver_graines(lons, lats, heures, maintenant, fichiers, tmpdir, vent=True)
+        garde = etat != 2
+        bilan["n_echoues_avant"] = int((etat == 1).sum())
+        bilan["n_perdus"] = int((etat == 2).sum())
+        d_km = 111.0 * np.hypot((lon_f - lons) * np.cos(np.radians(lats)), lat_f - lats)
+        bouge = garde & (heures > 0)
+        bilan["deplacement_median_km"] = round(float(np.median(d_km[bouge])), 1) if bouge.any() else 0.0
+        print(f"    → Dérive de rattrapage : déplacement médian {bilan['deplacement_median_km']} km, "
+              f"{bilan['n_echoues_avant']} échouées en route (rendues à la mer), {bilan['n_perdus']} perdues")
+        return lon_f[garde], lat_f[garde], bilan
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
 def simulate_drift(conn: sqlite3.Connection) -> bool:
     """
     Simulation de dérive de sargasses sur 5 jours avec OpenDrift.
@@ -1076,6 +1486,20 @@ def simulate_drift(conn: sqlite3.Connection) -> bool:
             # La grille de repli sèmerait des particules fictives partout : on refuse.
             raise RuntimeError(f"le masque côtier {_coast_km:g} km a écarté les "
                                f"{n_avant_masque} points de départ, simulation annulée")
+
+    # ── 1ter. Semis daté (éteint par défaut) ──────────────────────────────────
+    # SARGA_SEED_DATED=1 : chaque point est daté sur les images 1 jour puis
+    # transporté par les courants, le vent et les vagues passés jusqu'à maintenant
+    # (voir _semis_date). Après le masque côtier, qui juge l'endroit où le pixel a
+    # été VU. Jamais sur la grille de repli. Une panne fait ÉCHOUER la simulation.
+    _dated = _lire_semis_date()
+    _bilan_date = None
+    if _dated and n_particles > 0:
+        lons_seed, lats_seed, _bilan_date = _semis_date(lons_seed, lats_seed, _stride, cp_user, cp_pass,
+                                                        afai_date)
+        n_particles = len(lons_seed)
+        if n_particles == 0:
+            raise RuntimeError("le semis daté n'a gardé aucun point de départ, simulation annulée")
 
     if n_particles == 0:
         # Fallback : grille régulière sur la zone
@@ -1363,6 +1787,9 @@ def simulate_drift(conn: sqlite3.Connection) -> bool:
                     "seed_coast_km": _coast_km if n_avant_masque > 0 else None,
                     "n_seed_avant_masque": int(n_avant_masque),
                     "grille_repli": n_avant_masque == 0,
+                    # Semis daté : True/False, None sur la grille de repli (régime inconnu).
+                    "seed_dated": _dated if n_avant_masque > 0 else None,
+                    "seed_dated_bilan": _bilan_date,
                 }),
                 region_blob,
             ))

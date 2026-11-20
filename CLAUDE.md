@@ -387,8 +387,41 @@ Au large (plus de 30 km, 568 graines, rayon 15 km, j+2 à j+6 cumulés) : retrou
 contre 64 % en les laissant sur place, et la dérive ne fait pas mieux qu'une direction tirée au sort.
 Courant seul : 37 % ; ajouter vent et vagues n'améliore rien. Faire dériver les vieux pixels aurait donc dégradé le semis.
 Réserve : une seule semaine, en fin de saison, où le signal du large est au niveau du bruit de fond.
-**Ce témoin est à rejouer en pleine saison (mai-juillet)** avant de conclure sur la qualité du modèle de dérive
-(le vent passé au-delà de 10 jours n'est plus sur NOMADS : prendre le vent L4 de Copernicus).
+**Témoin rejoué en pleine saison le 2026-11-16 : le verdict s'inverse.** Six fenêtres de 9 jours réparties du
+9 mai au 26 juillet 2026, 21 737 graines à 15 km et plus des côtes, mêmes réglages que la prod sauf le vent
+(analyse L4 horaire de Copernicus `cmems_obs-wind_glo_phy_nrt_l4_0.125deg_PT1H`, NOMADS ne gardant que 10 jours).
+Au large (30 km et plus, rayon 15 km, j+2 à j+6 cumulés, 13 924 comparaisons appariées) : retrouvées dans 71,0 %
+des cas après dérive, 67,1 % sur place, 63,5 % avec la même distance dans une direction tirée au sort.
+Écart dérive moins hasard : +7,5 points [+5,5 ; +10,0]. Écart dérive moins sur place : +3,9 points [+0,9 ; +7,4]
+(intervalles à 95 % par rééchantillonnage des jours de semis). L'avantage sur l'immobilité grandit avec l'échéance
+(+5,5 points de j+4 à j+6) et la dérive n'est derrière dans aucune des six fenêtres (deux égalités, quatre gains).
+Lecture : en saison le signal du large est fait de vraies nappes qui bougent et le modèle les suit, modestement ;
+en novembre il était fait de détections fixes, donc de bruit. **Le « semis daté » redevient donc une piste pour la
+saison** (gain attendu de l'ordre de 4 à 5 points sur les pixels vieux de 4 à 6 jours), à décider avec le seuil
+saisonnier du masque avant mars 2027. Limites : taux de retrouvailles peu discriminant quand la mer est couverte
+de nappes, vent d'une autre source que la prod, une seule saison.
+Scripts et résultats bruts : sur le Mac de Sam, `~/sargassum-temoins/2026-11-16-derive-saison/`.
+
+**Semis daté : codé le 2026-11-20, ÉTEINT par défaut** (`SARGA_SEED_DATED`, ligne commentée dans `sargassum_run_linux.sh`).
+Allumé, `simulate_drift` appelle `_semis_date` juste après le masque côtier :
+1. chaque point du composite 7 jours est daté par la DERNIÈRE image 1 jour de la même semaine où son pixel dépasse le seuil
+   (`_fetch_afai_1j` demandé par dates, `_fenetre_du_composite`, `_dernier_jour_vu`) ; passage satellite pris à 16 h UTC ;
+2. forçages du passé téléchargés à part : courants Copernicus, vagues, et vent GFS des jours passés sur NOMADS
+   (`_fetch_gfs_wind_passe`, environ 60 requêtes, analyses de chaque run) ;
+3. dérive « de rattrapage » OpenDrift du jour de l'observation jusqu'à maintenant (`_deriver_graines`, mêmes réglages
+   que la prévision) ; une particule échouée en route est rendue à sa dernière position en mer ;
+4. la prévision de 5 jours repart de ces positions, sans autre changement.
+Aucun repli silencieux : réglage mal écrit, composite de plus de 72 h (panne du jeu AFAI, déjà arrivée 10 jours en
+juillet 2025), image du jour du composite absente, plus de 50 % de points introuvables, vent passé troué ou dérive
+arrêtée avant l'heure font ÉCHOUER la simulation, donc alerte Telegram et dernière dérive gardée.
+Trace : `raw_metadata.seed_dated` (true, false, null sur la grille de repli) et `seed_dated_bilan` (points dérivés,
+âges, échouées en route, déplacement médian), recopié dans `forecast_archive.seed_dated` (1, 0, NULL avant le 20/11).
+Essai réel sur copie le 20/11 : 1025 points, âge médian 99 h, déplacement médian 60 km, 89 échouées en route,
+3 min contre 1 min 40, pic mémoire 2,76 Go contre 2,69 Go éteint. Tests : `test_seed_date.py` (43 tests, 25 mutations attrapées).
+**Avant de l'allumer** : (a) comparer semis daté et semis actuel sur des semaines de mai-juillet, avec ce code ;
+(b) séparer les régimes dans `sarga_verification.py` (aujourd'hui seul `seed_coast_km` l'est) ; (c) mesurer la mémoire
+avec le nombre de particules de la saison ; (d) décider en même temps du seuil saisonnier du masque.
+Limite connue, hors de ce changement : le semis habituel ne contrôle pas la fraîcheur du composite 7 jours.
 
 ---
 
@@ -398,7 +431,8 @@ Réserve : une seule semaine, en fin de saison, où le signal du large est au ni
   que l'image 1 jour n'a plus revus depuis longtemps. Sur 34 818 graines (6 jours, même zone, même pas de 3) :
   39 % revues à 0-1 jour, 26 % à 2-3 jours, **35 % à 4-6 jours**.
   ⚠️ L'idée du « semis daté » (faire dériver chaque vieux pixel jusqu'à aujourd'hui) a été TESTÉE le 2026-11-10
-  et **écartée** : voir la section « Masque côtier » ci-dessus.
+  et **écartée hors saison**, puis rejouée le 2026-11-16 sur mai-juillet où la dérive bat l'immobilité :
+  voir la section « Masque côtier » ci-dessus.
 - **Piège ERDDAP** : `AFAI_1D` et `AFAI_7D` n'ont pas les mêmes décimales de coordonnées. Toujours arrondir
   (3 décimales) avant de comparer deux jeux, sinon aucune clé ne correspond et on obtient un faux « 0 % ».
 - **AVISO+ GOES journalier** (`GLO_ABDM_AAAAMMJJ_v0.nc`, 14 Mo, J+1) : plus lisible que `AFAI_1D` près de SBH
@@ -412,7 +446,7 @@ Réserve : une seule semaine, en fin de saison, où le signal du large est au ni
 ```bash
 cd /opt/sargassum
 venv/bin/python3 -m pytest test_beaches.py test_alert.py test_contributors.py test_webcam_truth.py test_seed_mask.py test_healthcheck.py -v
-# 141 tests (2026-11-14). test_contributors couvre la garantie de modération du portail,
+# 183 tests (2026-11-14). test_contributors couvre la garantie de modération du portail,
 # test_webcam_truth la règle de verdict et le fait que la webcam n'écrit jamais dans beach_observations.
 ```
 

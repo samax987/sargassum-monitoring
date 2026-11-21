@@ -423,6 +423,21 @@ Essai réel sur copie le 20/11 : 1025 points, âge médian 99 h, déplacement m�
 avec le nombre de particules de la saison ; (d) décider en même temps du seuil saisonnier du masque.
 Limite connue, hors de ce changement : le semis habituel ne contrôle pas la fraîcheur du composite 7 jours.
 
+**Comparaison (a) faite le 2026-11-21 : AUCUN GAIN MESURABLE, le réglage reste éteint.** Banc hors production,
+12 composites hebdomadaires du 10 mai au 26 juillet 2026, 31 581 points à 15 km et plus des côtes, datés et dérivés
+par le code de production, puis même prévision de 5 jours pour trois variantes : semis actuel, semis daté, déplacement
+de même distance dans une direction au hasard. Juge : images 1 jour de j+1 à j+5, détection dans un rayon de 15 km,
+23 232 comparaisons appariées. **Actuel 63,4 %, daté 63,7 %, hasard 58,1 %.** Daté moins actuel : +0,2 point
+[-1,9 ; +2,6], 7 fenêtres gagnées contre 5. Daté moins hasard : +5,6 [+4,1 ; +7,5]. Même chose à 5 km (-0,2), par âge
+du pixel (1-2 j : +0,2 ; 3-4 j : +0,8 ; 5-7 j : -0,3) et à l'instant du semis (+1,0 [-2,5 ; +5,9]).
+Lecture : la dérive n'est pas du bruit (elle bat le hasard), mais rester sur place fait aussi bien, parce qu'en saison
+les nappes se renouvellent aux mêmes endroits. Le gain du témoin du 16/11 (+3,9) ne se retrouve pas avec les pixels du
+composite. Effet de bord à connaître : le semis daté double les particules échouées à j+5 (3 018 contre 1 568), donc
+il changerait les scores de plage sans preuve que ce soit en mieux ; ce banc ne juge pas les arrivées à la côte.
+Écarts avec la prod : vent Copernicus L4 au lieu de GFS, prévision faite avec des champs analysés.
+Fichiers : Mac `~/sargassum-temoins/2026-11-20-semis-date-contre-actuel/` (`compare_semis.py`, `bilan.py`, `bilan.txt`).
+Pour rouvrir le sujet il faudrait une vérité À LA CÔTE (webcam, signalements), pas un nouveau test au large.
+
 ---
 
 ### Constats satellite du 2026-11-09 (rien changé en prod)

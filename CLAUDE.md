@@ -438,6 +438,23 @@ il changerait les scores de plage sans preuve que ce soit en mieux ; ce banc ne 
 Fichiers : Mac `~/sargassum-temoins/2026-11-20-semis-date-contre-actuel/` (`compare_semis.py`, `bilan.py`, `bilan.txt`).
 Pour rouvrir le sujet il faudrait une vérité À LA CÔTE (webcam, signalements), pas un nouveau test au large.
 
+**Comparaison à la côte faite le 2026-11-22 : NI L'UN NI L'AUTRE SEMIS NE VOIT LES ARRIVAGES DE SAINT-BARTH.** Banc hors
+production : 89 jours rejoués du 4 mai au 31 juillet 2026 (357 374 points de départ, sans masque, distance à la côte
+gardée), prévision de 5 jours avec les deux semis, plages notées par `beaches._score_beach` (copie du code), masque
+appliqué après coup à 0, 5, 10, 15, 20 et 30 km. Juges : webcam de Flamands (79 jours sûrs dont 8 « radeaux ») et
+signalements de plage (39, dont 21 moyen ou fort, sur 16 jours). Mesure : aire sous la courbe (0,5 = hasard).
+Webcam, prévision de la veille à 3 jours avant, masque 15 km, note locale : actuel 0,59 [0,38 ; 0,80], daté 0,61
+[0,43 ; 0,80], écart +0,02 [-0,05 ; +0,08]. Signalements : actuel 0,48, daté 0,45, écart -0,03 [-0,19 ; +0,04] ; sur la
+note régionale exposée le daté est plutôt moins bon (-0,16 [-0,32 ; +0,01]). Toutes les marges contiennent 0,5.
+La veille des 8 jours « radeaux » de la webcam, la note locale de Flamands valait 0 dans les deux semis.
+Rayon du masque en saison : aucun rayon ne se détache (webcam 0,53 sans masque à 0,61 à 30 km, marges de ±0,2), et en
+saison le masque à 15 km n'écarte que 7,6 % des points de départ (64 % hors saison). Rien ne justifie de le changer.
+Le semis daté échoue plus de particules (44 468 contre 31 302 à j+5) sans mieux prévoir. Il reste éteint.
+Limites : 8 jours d'arrivage à la webcam, signalements concentrés du 2 au 7 juillet, forçages analysés et vent L4
+(pas le GFS), une seule plage filmée. Leçon : le verrou du dernier kilomètre n'est ni la date du semis ni le rayon du
+masque ; les arrivages vus à Flamands ne correspondent à aucune particule proche dans le modèle.
+Témoins : Mac `~/sargassum-temoins/2026-11-20-semis-date-contre-actuel/cote/` (bilan_cote.txt, notes.json, scripts).
+
 ---
 
 ### Constats satellite du 2026-11-09 (rien changé en prod)

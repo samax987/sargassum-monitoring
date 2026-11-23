@@ -489,6 +489,16 @@ l'autre : garder une note continue, pas un seuil. Limites : une seule plage, ven
 prévision), 20 jours « radeaux » groupés en épisodes. Avant toute mise en service : la calculer en parallèle sans
 l'afficher, et trouver le vent favorable des autres plages. Témoin : `note_vent.py` dans le même dossier du Mac.
 
+**Note en parallèle en service depuis le 2026-11-23 (`sarga_note_vent.py`, jamais affichée).** Cron webapps
+`40 13 * * *` : chaque jour, pour Flamands, deux lignes dans la table `note_vent_parallele` (le jour même, et le
+lendemain avec le vent PRÉVU) : pixels du dernier composite 7 jours à moins de 25, 50 et 100 km, vent moyen des 24 h
+avant 14 h UTC (Open-Meteo, sans clé), note = pixels à 50 km si le vent vient de 90° ou moins, sinon 0. N'écrit que
+dans sa table ; ne touche ni aux scores, ni à la carte, ni aux alertes ; aucun message Telegram. Le bilan se lit avec
+`venv/bin/python3 sarga_note_vent.py --bilan` (jours rangés, jours manqués, tri contre la webcam). Journal :
+`logs/note_vent.log`. Limite : un échec (satellite ou vent muet) n'est signalé à personne, il se voit seulement dans
+le journal et dans les jours manqués du bilan. Pour l'arrêter : retirer la ligne du crontab (sauvegarde d'avant :
+`crontab.bak-20261123-note-vent`). Décision à prendre après quelques semaines de saison, sur le tri de l'avance 1.
+
 ---
 
 ### Constats satellite du 2026-11-09 (rien changé en prod)

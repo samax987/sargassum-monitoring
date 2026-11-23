@@ -452,8 +452,42 @@ saison le masque à 15 km n'écarte que 7,6 % des points de départ (64 % hors s
 Le semis daté échoue plus de particules (44 468 contre 31 302 à j+5) sans mieux prévoir. Il reste éteint.
 Limites : 8 jours d'arrivage à la webcam, signalements concentrés du 2 au 7 juillet, forçages analysés et vent L4
 (pas le GFS), une seule plage filmée. Leçon : le verrou du dernier kilomètre n'est ni la date du semis ni le rayon du
-masque ; les arrivages vus à Flamands ne correspondent à aucune particule proche dans le modèle.
+masque (phrase corrigée le 22/11 au soir : le modèle avait bien des particules proches, voir l'enquête ci-dessous).
 Témoins : Mac `~/sargassum-temoins/2026-11-20-semis-date-contre-actuel/cote/` (bilan_cote.txt, notes.json, scripts).
+
+**Enquête du 2026-11-22 sur les 8 jours « radeaux » de Flamands (mai-juillet 2026).** Images relues une par une : les
+radeaux sont réels mais petits (taches de quelques dizaines de mètres dans une baie d'un kilomètre), donc invisibles
+un par un pour le satellite. Le satellite voyait pourtant des sargasses dans la région : médiane de 16 points de départ
+à moins de 25 km de Flamands la veille des jours « radeaux », contre 5 les jours « rien » (pouvoir de tri 0,61 à 0,65,
+faible). Le modèle avait donc des particules proches (la plus proche à 7 km en médiane), mais la note locale compte
+dans un rayon de 2 km : elle vaut 0 presque tous les jours, par construction, parce que les particules sont plus
+espacées que ce rayon. Piste la plus nette, à confirmer : le vent des 24 h avant la capture (archive Open-Meteo).
+Les 8 jours « radeaux » ont tous un vent d'est à nord-est (74° à 90°) : 8 jours sur 49 avec ce vent, 0 sur 29 quand le
+vent vient de plus de 90° (est à sud-est). Flamands ouvre au nord-ouest : il faut une composante nord pour pousser les
+radeaux dans la baie. Réserve : 8 jours seulement et seuil de 90° choisi après avoir vu les données (une chance sur
+cinquante environ que ce soit le hasard, avant correction pour les variables essayées). Les nuages n'ont pas été
+regardés. Témoins : Mac `~/sargassum-temoins/2026-11-20-semis-date-contre-actuel/cote/` (enquete.py, vent_om.json,
+webcam/).
+
+**Piste du vent vérifiée hors réglage le 2026-11-22 (règle figée, rejouée telle quelle).** Pas de captures en 2025
+(la webcam est archivée depuis le 22/02/2026) : la vérification porte sur les 134 jours jugés hors mai-juillet 2026.
+Vent des 24 h de 90° ou moins : 59 jours dont 11 « radeaux ». Vent de plus de 90° : 75 jours dont 1 « radeaux »
+(le 30/04, 105° et 9 nœuds). Une chance sur 2 000 environ par hasard si les jours étaient indépendants ; ils ne le
+sont pas (épisodes du 28/03 au 03/04 et du 19 au 24/04), donc la preuve est plus faible que ce chiffre, mais la
+règle tient sur des jours jamais regardés. Images relues : les jours de mars-avril sont de vraies sargasses ; les
+deux d'automne (16/10, 18/11) sont douteux. La règle dit quand la baie PEUT recevoir (environ un jour sur cinq par
+bon vent), pas qu'elle recevra. Rien n'est branché en production. Témoin : `verif_vent.py` dans le même dossier.
+
+**Note candidate « satellite proche × vent qui porte » mesurée le 2026-11-22 (hors production).** Pour Flamands :
+nombre de pixels du composite 7 jours de l'avant-veille à moins de 50 km, mis à zéro si le vent des 24 h vient de plus
+de 90°. Aire sous la courbe contre la webcam (0,5 = hasard, blocs de 7 jours pour la marge) : réglage mai-juillet
+0,82 [0,65 ; 0,93] ; printemps seul, jamais regardé (22/02 au 04/05, 40 jours dont 10 « radeaux ») 0,86 [0,52 ; 0,97] ;
+toute l'année (218 jours, 20 « radeaux ») 0,85 [0,76 ; 0,92]. À comparer : note locale actuelle 0,59 [0,38 ; 0,80],
+vent seul 0,75, satellite seul 0,71, « radeaux la veille » 0,56. Les rayons 25, 50 et 100 km et le masque à 0 ou 15 km
+donnent des résultats voisins (0,81 à 0,85). Un seuil fixe en nombre de pixels ne se transporte pas d'une saison à
+l'autre : garder une note continue, pas un seuil. Limites : une seule plage, vent d'archive (en service ce serait une
+prévision), 20 jours « radeaux » groupés en épisodes. Avant toute mise en service : la calculer en parallèle sans
+l'afficher, et trouver le vent favorable des autres plages. Témoin : `note_vent.py` dans le même dossier du Mac.
 
 ---
 

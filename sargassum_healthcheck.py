@@ -16,6 +16,8 @@ Verifications
   4. Dashboard Streamlit : HTTP GET localhost:8501/_stcore/health
   5. Echec de simulation : une ligne recente dans logs/echecs_simulation.log
      (ecrit par sargassum_run_linux.sh a chaque simulation ratee, jamais efface)
+  6. Note en parallele : note_vent_parallele.created_at < 50h
+     (sarga_note_vent.py, cron quotidien 13h40 UTC ; experience jamais affichee)
 
 Usage
 -----
@@ -51,6 +53,9 @@ THRESHOLDS = {
     'last_drift':     24,   # drift peut echouer 1 fois sans paniquer
     'last_news':      48,   # scraper tourne 1x/jour
     'anfc_max_age':   24,   # alerte si anfc indispo et fallback nrt utilise depuis 24h+
+    # sarga_note_vent.py tourne 1x/jour : 50 h = deux passages manques de suite.
+    # Un seul jour sans satellite (serveur NOAA en panne) ne declenche donc rien.
+    'note_vent':      50,
 }
 
 # Journal des simulations ratees (une date ISO par ligne, ajout seul)
@@ -206,6 +211,23 @@ def check_sim_failure() -> tuple[bool, str]:
     return True, "OK (aucun echec recent)"
 
 
+def check_note_vent(conn: sqlite3.Connection) -> tuple[bool, str]:
+    """Verifie que la note en parallele (sarga_note_vent.py) est calculee chaque jour."""
+    suffixe = "experience sans effet sur la carte ni les alertes ; voir logs/note_vent.log"
+    try:
+        last = conn.execute("SELECT MAX(created_at) FROM note_vent_parallele").fetchone()[0]
+    except sqlite3.Error as e:
+        # Une lecture en echec n'est pas « rien a signaler » : on le dit
+        return False, f"Table note_vent_parallele illisible ({type(e).__name__}) — {suffixe}"
+    if not last:
+        return False, f"Aucun calcul enregistre — {suffixe}"
+    age_h = _hours_since(last)
+    threshold = THRESHOLDS['note_vent']
+    if age_h > threshold:
+        return False, f"Dernier calcul il y a {age_h:.0f}h (seuil: {threshold}h) — {suffixe}"
+    return True, f"OK ({age_h:.1f}h)"
+
+
 def check_dashboard() -> tuple[bool, str]:
     """Verifie que le dashboard Streamlit repond."""
     try:
@@ -224,6 +246,7 @@ CHECKS = [
     ('drift',     check_last_drift,   'Simulation OpenDrift (5j)'),
     ('sim_echec', check_sim_failure,  'Echec de simulation (dernier passage)'),
     ('dashboard', check_dashboard,    'Dashboard Streamlit :8501'),
+    ('note_vent', check_note_vent,    'Note en parallele Flamands (sarga_note_vent.py)'),
 ]
 
 

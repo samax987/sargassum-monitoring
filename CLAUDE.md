@@ -495,9 +495,19 @@ lendemain avec le vent PRÉVU) : pixels du dernier composite 7 jours à moins de
 avant 14 h UTC (Open-Meteo, sans clé), note = pixels à 50 km si le vent vient de 90° ou moins, sinon 0. N'écrit que
 dans sa table ; ne touche ni aux scores, ni à la carte, ni aux alertes ; aucun message Telegram. Le bilan se lit avec
 `venv/bin/python3 sarga_note_vent.py --bilan` (jours rangés, jours manqués, tri contre la webcam). Journal :
-`logs/note_vent.log`. Limite : un échec (satellite ou vent muet) n'est signalé à personne, il se voit seulement dans
-le journal et dans les jours manqués du bilan. Pour l'arrêter : retirer la ligne du crontab (sauvegarde d'avant :
+`logs/note_vent.log`. Depuis le 2026-11-23, `sargassum_healthcheck.py` a un 7e contrôle `note_vent` : alerte Telegram
+si aucun calcul depuis 50 h (deux passages manqués de suite ; un seul jour sans satellite ne déclenche rien), puis
+« système rétabli » à la reprise. Le message précise que c'est une expérience sans effet sur la carte ni les alertes. Pour l'arrêter : retirer la ligne du crontab (sauvegarde d'avant :
 `crontab.bak-20261123-note-vent`). Décision à prendre après quelques semaines de saison, sur le tri de l'avance 1.
+
+**Vent favorable des autres plages : NON déductible de l'orientation avec les données actuelles (2026-11-23).**
+Hypothèse testée : une plage reçoit quand le vent des 24 h vient du côté où elle est ouverte (orientation tirée de
+`exposure_json`). Juge : 45 signalements de plage sur 21 jours. Résultat : tri de 0,54, et 0,50 sans Flamands, soit le
+hasard. Raisons : trop peu de signalements par plage (2 à 5), vent presque toujours entre 70° et 110° ces jours-là, et
+un signalement décrit ce qui est sur le sable (accumulé sur plusieurs jours), pas une arrivée du jour. Seul constat
+net : les plages au vent (Toiny, Petit Cul-de-Sac, Grande Saline, Gouverneur) sont notées moyen ou fort 13 fois sur
+14, quel que soit le vent. Pour étendre la note à une autre plage, il faut d'abord une vérité quotidienne sur cette
+plage (une webcam validée à l'aveugle, comme Flamands). Témoin : Mac `~/sargassum-temoins/2026-11-22-note-vent/`.
 
 ---
 

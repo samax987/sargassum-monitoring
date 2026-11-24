@@ -509,6 +509,19 @@ net : les plages au vent (Toiny, Petit Cul-de-Sac, Grande Saline, Gouverneur) so
 14, quel que soit le vent. Pour étendre la note à une autre plage, il faut d'abord une vérité quotidienne sur cette
 plage (une webcam validée à l'aveugle, comme Flamands). Témoin : Mac `~/sargassum-temoins/2026-11-22-note-vent/`.
 
+**Deuxième webcam cherchée le 2026-11-23 : aucune des caméras déjà capturées ne convient.** `Aeroport` et
+`Col_Tourmente` ne montrent pas la mer. `Rade_Gustavia` rend une image noire 247 jours sur 247 depuis mars (le flux
+est mort, la capture continue à vide). `Port_Gustavia` est la seule à montrer de l'eau : 40 images (les 20 jours
+« radeaux » de Flamands et 20 jours « rien » tirés au sort entre le 20/03 et le 15/08), recadrées sur l'eau,
+anonymisées et jugées à l'aveugle : 0 image sur 40 avec des sargasses. Le port est sous le vent, la caméra est
+loin (nappe visible à partir de 5 à 10 m dans le port, 30 à 50 m dans la rade). Sans jour positif il n'y a rien à
+valider. Étendre la note à une autre plage demande donc une NOUVELLE source d'images, sur une plage au vent.
+Recherche de webcams publiques faite le même jour : aucune à Toiny, Grand ou Petit Cul-de-Sac, Marigot, Lorient,
+Saline ou Gouverneur. Seule piste nouvelle : « SBH Baie de St-Jean » (St-Barth LiveCam, YouTube `hb_nPVSnNqw`), vue
+haute sur la baie avec beaucoup d’eau, flux vivant le 23/11, sans archive. Capturée chaque jour à 14h UTC depuis le 2026-11-24 (`Baie_Saint-Jean`) ;
+à valider à l’aveugle après une saison d’images avant de s’en servir.
+Témoin : Mac `~/sargassum-temoins/2026-11-23-deuxieme-webcam/`.
+
 ---
 
 ### Constats satellite du 2026-11-09 (rien changé en prod)

@@ -11,7 +11,6 @@ YT_THUMB = "https://img.youtube.com/vi/{yt_id}/maxresdefault.jpg"
 
 # "url" overrides BASE_URL when the camera uses a different endpoint.
 # Saint-Barth cameras stream via YouTube Live → thumbnail updated periodically.
-# Baie_Saint-Jean is currently offline (server HTTP 500).
 CAMERAS = [
     {"name": "Saint-Jean_Plaine",   "key": "st-barth-saint-jean",       "island": "Saint-Barth",  "url": YT_THUMB.format(yt_id="028GpBNaiJs")},
     {"name": "Aeroport",            "key": "st-barth-avions-decollage",  "island": "Saint-Barth",  "url": YT_THUMB.format(yt_id="3PQNnVqrJEw")},
@@ -19,7 +18,9 @@ CAMERAS = [
     {"name": "Col_Tourmente",       "key": "st-barth-col-tourmente",     "island": "Saint-Barth",  "url": YT_THUMB.format(yt_id="15pVqwQb7A0")},
     {"name": "Rade_Gustavia",       "key": "st-barth-rade-gustavia",     "island": "Saint-Barth",  "url": YT_THUMB.format(yt_id="jBEtwmuJPLA")},
     {"name": "Flamand_Beach",       "key": "st-barth-flamand-beach",     "island": "Saint-Barth",  "url": YT_THUMB.format(yt_id="DATTZ-F82Zk")},
-    # Baie_Saint-Jean : offline (serveur HTTP 500) — retirée temporairement
+    # Baie_Saint-Jean : remise le 2026-11-23 (flux YouTube vivant). Vue haute sur la baie, candidate comme
+    # deuxième vérité webcam : on accumule des images, à valider à l’aveugle avant tout usage.
+    {"name": "Baie_Saint-Jean",     "key": "st-barth-baie-saint-jean",   "island": "Saint-Barth",  "url": YT_THUMB.format(yt_id="hb_nPVSnNqw")},
     {"name": "Anses_Arlet",         "key": "ansesdarlet",                "island": "Martinique",   "url": "https://s1.vision-environnement.com/live/modules/timelapse/captureptz/ansesdarlet.jpg"},
     # Maho_Beach : image figée depuis mars 2024 (Last-Modified statique) — désactivée
     # {"name": "Maho_Beach",        "key": "mahobeach",                  "island": "Saint-Martin"},
